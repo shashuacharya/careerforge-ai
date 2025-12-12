@@ -73,7 +73,7 @@ const useStore = (selector = (state) => state) => {
 };
 
 // API Configuration
-const GEMINI_API_KEY = 'AIzaSyB15IKWCIiG6mK_nR1epQ7WTjj1LGthON4';
+const GEMINI_API_KEY = 'YOUR_API_KEY';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent';
 
 // Helper function to call Gemini API
