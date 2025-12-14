@@ -1,6 +1,6 @@
 /* eslint-disable no-unused-vars */
 import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react';
-import { Upload, Mic, MicOff, ChevronRight, Lightbulb, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { Upload, Mic, MicOff, ChevronRight, Lightbulb, CheckCircle, AlertCircle, Loader2, TrendingUp, Award, Target, BarChart3 } from 'lucide-react';
 
 // Load PDF.js and Mammoth libraries
 const loadExternalLibraries = () => {
@@ -55,7 +55,11 @@ const store = createStore({
   answers: {},
   feedback: {},
   suggestions: {},
-  followUpQuestions: {}
+  followUpQuestions: {},
+  questionHistory: [],
+  currentQuestion: '',
+  difficultyLevel: 'medium',
+  selectedLevel: null
 });
 
 const useStore = (selector = (state) => state) => {
@@ -69,9 +73,10 @@ const useStore = (selector = (state) => state) => {
 };
 
 // API Configuration
-// eslint-disable-next-line no-undef
-const GEMINI_API_KEY = process.env.REACT_APP_GEMINI_API_KEY;
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent';
+
+// Helper function to call Gemini API
 const callGeminiAPI = async (prompt, fileData = null) => {
   try {
     const parts = [];
@@ -112,6 +117,56 @@ const callGeminiAPI = async (prompt, fileData = null) => {
   }
 };
 
+// Check if text is a resume
+const isResumeFormat = (text) => {
+  if (!text || text.length < 100) return false;
+  
+  const lowercaseText = text.toLowerCase();
+  
+  // Common resume sections/keywords
+  const resumeKeywords = [
+    'resume', 'cv', 'curriculum vitae',
+    'experience', 'work experience', 'employment history',
+    'education', 'academic background',
+    'skills', 'technical skills', 'professional skills',
+    'projects', 'personal projects',
+    'certifications', 'licenses',
+    'summary', 'objective', 'profile',
+    'contact', 'phone', 'email', 'linkedin',
+    'achievements', 'accomplishments',
+    'work history', 'professional experience'
+  ];
+  
+  // Check for multiple resume indicators
+  let score = 0;
+  
+  // Check for section headers
+  const hasExperience = /(experience|work history|employment)/i.test(text);
+  const hasEducation = /(education|academic)/i.test(text);
+  const hasSkills = /(skills|technical|programming)/i.test(text);
+  
+  // Check for date formats common in resumes
+  const hasDates = /\b(20\d{2}|19\d{2}|present|current)\b/i.test(text);
+  
+  // Check for bullet points or lists
+  // eslint-disable-next-line no-useless-escape
+  const hasBulletPoints = /(•|\-|\*|\d\.)/.test(text);
+  
+  // Check for job titles
+  const hasJobTitles = /\b(intern|developer|engineer|analyst|manager|director|lead|senior|junior)\b/i.test(text);
+  
+  // Calculate score
+  if (hasExperience) score += 2;
+  if (hasEducation) score += 2;
+  if (hasSkills) score += 1;
+  if (hasDates) score += 1;
+  if (hasBulletPoints) score += 1;
+  if (hasJobTitles) score += 1;
+  
+  // At least 5 points to be considered a resume
+  return score >= 5;
+};
+
 // Extract text from file
 const extractTextFromFile = async (file) => {
   return new Promise((resolve, reject) => {
@@ -148,7 +203,8 @@ const extractTextFromFile = async (file) => {
             text = fullText;
           } catch (pdfError) {
             console.error('PDF parsing error:', pdfError);
-            text = `Resume File: ${file.name}\nUnable to parse PDF content.`;
+            reject(new Error('Failed to parse PDF file. Please ensure it is a valid PDF document.'));
+            return;
           }
         } else if (fileExt === 'docx') {
           try {
@@ -158,10 +214,21 @@ const extractTextFromFile = async (file) => {
             text = result.value;
           } catch (docxError) {
             console.error('DOCX parsing error:', docxError);
-            text = `Resume File: ${file.name}\nUnable to parse DOCX content.`;
+            reject(new Error('Failed to parse DOCX file. Please ensure it is a valid Word document.'));
+            return;
           }
         } else if (fileExt === 'doc') {
-          text = `Resume File: ${file.name}\nOld .doc format detected. Please convert to .docx or .pdf.`;
+          reject(new Error('Old .doc format detected. Please convert to .docx or .pdf.'));
+          return;
+        } else {
+          reject(new Error('Unsupported file format. Please upload PDF, DOCX, DOC, or TXT files.'));
+          return;
+        }
+        
+        // Validate if it's a resume format
+        if (!isResumeFormat(text)) {
+          reject(new Error('The uploaded file does not appear to be a resume. Please upload a valid resume document.'));
+          return;
         }
         
         resolve({
@@ -178,20 +245,137 @@ const extractTextFromFile = async (file) => {
     
     if (fileExt === 'pdf' || fileExt === 'docx' || fileExt === 'doc') {
       reader.readAsArrayBuffer(file);
-    } else {
+    } else if (fileExt === 'txt') {
       reader.readAsText(file);
+    } else {
+      reject(new Error('Unsupported file format'));
     }
   });
 };
 
+// New helper function to format answers with sections
+const formatAnswerWithSections = (text) => {
+  if (!text) return { isStructured: true, sections: [] };
+  
+  const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+  const sections = [];
+  let currentSection = { title: '', points: [] };
+  
+  for (const line of lines) {
+    // Check for section headers (ending with colon)
+    if (line.match(/^[A-Z][A-Z\s]+:$/) || line.match(/^[A-Z][a-zA-Z\s]+:$/)) {
+      if (currentSection.title || currentSection.points.length > 0) {
+        sections.push({ ...currentSection });
+      }
+      currentSection = { 
+        title: line.replace(':', '').trim(), 
+        points: [],
+        isParagraph: line.includes('SAMPLE ANSWER')
+      };
+    } 
+    // Check for bullet points
+    else if (line.match(/^[•\-–—]\s+/) || line.match(/^\d+\.\s+/)) {
+      // eslint-disable-next-line no-useless-escape
+      currentSection.points.push(line.replace(/^[•\-–—\d\.]\s+/, '').trim());
+    }
+    // Long lines might be paragraph content
+    else if (currentSection.title === 'SAMPLE ANSWER' && line.length > 20) {
+      currentSection.points.push(line);
+    }
+    // Regular content
+    else if (line.length > 10) {
+      currentSection.points.push(line);
+    }
+  }
+  
+  if (currentSection.title || currentSection.points.length > 0) {
+    sections.push({ ...currentSection });
+  }
+  
+  return {
+    isStructured: true,
+    sections: sections
+  };
+};
+
+// Format suggestion text into structured format
+const formatSuggestionText = (text) => {
+  if (!text) return '';
+  
+  // Remove markdown formatting
+  let formatted = text
+    .replace(/\*\*/g, '')
+    .replace(/\*/g, '')
+    .replace(/#{1,6}\s*/g, '')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/`/g, '');
+  
+  // Split into lines and clean up
+  const lines = formatted.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+  
+  // Group lines into sections
+  const sections = [];
+  let currentSection = { title: '', points: [] };
+  
+  for (const line of lines) {
+    if (line.match(/^(Structure|Key Points|Examples|Tips|Steps|Approach|What to Include|How to Structure|Important Notes|Do's and Don'ts):/i)) {
+      if (currentSection.title || currentSection.points.length > 0) {
+        sections.push({ ...currentSection });
+      }
+      currentSection = { title: line.replace(/:/, '').trim(), points: [] };
+    } else if (line.match(/^[•\-–—]\s+/)) {
+      currentSection.points.push(line.replace(/^[•\-–—]\s+/, '').trim());
+    } else if (line.match(/^\d+\.\s+/)) {
+      currentSection.points.push(line.replace(/^\d+\.\s+/, '').trim());
+    } else if (currentSection.title) {
+      currentSection.points.push(line);
+    } else if (line.length > 50) { // Consider long lines as new section titles
+      if (currentSection.points.length > 0) {
+        sections.push({ ...currentSection });
+      }
+      currentSection = { title: line, points: [] };
+    }
+  }
+  
+  if (currentSection.title || currentSection.points.length > 0) {
+    sections.push({ ...currentSection });
+  }
+  
+  // If we couldn't parse into sections, return as bullet points
+  if (sections.length === 0) {
+    return {
+      isStructured: false,
+      content: formatted
+    };
+  }
+  
+  return {
+    isStructured: true,
+    sections: sections
+  };
+};
+
 // AI Functions using Gemini API
-const analyzeResumeAndGenerateQuestions = async (resumeFile, jobDescription) => {
+const analyzeResumeAndGenerateQuestions = async (resumeFile, jobDescription, difficultyLevel = 'medium') => {
   try {
+    console.log('Starting resume analysis...');
     const resumeData = await extractTextFromFile(resumeFile);
+    console.log('Resume text extracted, length:', resumeData.text.length);
+    
+    const difficultyPrompt = {
+      'beginner': 'Generate basic, fundamental questions suitable for entry-level/junior positions.',
+      'medium': 'Generate practical, experience-based questions suitable for mid-level positions.',
+      'advanced': 'Generate complex, system-level and leadership questions suitable for senior/expert positions.'
+    }[difficultyLevel] || '';
     
     const prompt = `You are an expert interview coach. Analyze the resume provided and generate personalized interview questions.
 
-${jobDescription ? `Job Description: ${jobDescription}` : 'Generate questions for a general technical role'}
+Resume Content:
+${resumeData.text}
+
+${jobDescription ? `Target Job Description: ${jobDescription}` : 'Generate questions for a general technical role'}
+
+${difficultyPrompt}
 
 IMPORTANT: Analyze the resume content carefully and generate TWO SEPARATE types of questions based on the candidate's experience, skills, and projects mentioned in their resume:
 
@@ -199,6 +383,7 @@ IMPORTANT: Analyze the resume content carefully and generate TWO SEPARATE types 
    - Focus on technical skills, technologies, and tools mentioned in the resume
    - Ask about projects, architectures, and technical decisions they made
    - Reference specific technologies from their resume
+   - Difficulty level: ${difficultyLevel}
 
 2. BEHAVIORAL QUESTIONS (5 questions):
    - Focus on past experiences, challenges, and achievements from their resume
@@ -222,92 +407,280 @@ You MUST respond with ONLY valid JSON in this exact format (no extra text, no ma
     "Share an example of [behavioral question 4 based on resume]",
     "Tell me about [behavioral question 5 based on resume]"
   ]
-}`;
+}
 
+CRITICAL: The questions MUST be personalized based on the resume content. Reference specific technologies, projects, or experiences from the resume.`;
+
+    console.log('Calling Gemini API for question generation...');
     const response = await callGeminiAPI(prompt, resumeData);
+    console.log('API Response received:', response.substring(0, 200) + '...');
     
-    let jsonStr = response.trim().replace(/```json\n?/g, '').replace(/```\n?/g, '');
+    let jsonStr = response.trim();
+    
+    // Clean JSON string
+    jsonStr = jsonStr.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+    jsonStr = jsonStr.replace(/^[\s\S]*?\{/, '{');
+    jsonStr = jsonStr.replace(/\}[\s\S]*$/, '}');
+    
     const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
     
     if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-      if (parsed.technicalQuestions && parsed.behavioralQuestions && 
-          parsed.technicalQuestions.length === 5 && 
-          parsed.behavioralQuestions.length === 5) {
-        return parsed;
+      try {
+        const parsed = JSON.parse(jsonMatch[0]);
+        console.log('Parsed questions:', {
+          technicalCount: parsed.technicalQuestions?.length,
+          behavioralCount: parsed.behavioralQuestions?.length
+        });
+        
+        if (parsed.technicalQuestions && parsed.behavioralQuestions && 
+            Array.isArray(parsed.technicalQuestions) && 
+            Array.isArray(parsed.behavioralQuestions)) {
+          
+          // Ensure we have exactly 5 questions each
+          const technicalQuestions = parsed.technicalQuestions.slice(0, 5);
+          const behavioralQuestions = parsed.behavioralQuestions.slice(0, 5);
+          
+          // Fill missing questions if needed
+          while (technicalQuestions.length < 5) {
+            technicalQuestions.push(`Technical question about ${difficultyLevel} concepts`);
+          }
+          while (behavioralQuestions.length < 5) {
+            behavioralQuestions.push(`Behavioral question about teamwork and collaboration`);
+          }
+          
+          return {
+            technicalQuestions,
+            behavioralQuestions
+          };
+        }
+      } catch (parseError) {
+        console.error('JSON parse error:', parseError);
+        console.error('Response that failed to parse:', jsonStr);
       }
     }
     
+    console.log('Failed to parse valid questions from API, using fallback...');
     throw new Error('Failed to parse questions from AI response');
+    
   } catch (error) {
     console.error('Error generating questions:', error);
-    alert(`Failed to generate questions: ${error.message}\n\nPlease check:\n1. Your API key is correct\n2. You have API quota remaining`);
     
-    return {
-      technicalQuestions: [
-        "Explain the concept of closures in JavaScript and provide a practical use case.",
-        "What is the difference between SQL and NoSQL databases? When would you use each?",
-        "Describe the SOLID principles in object-oriented programming.",
-        "How does React's Virtual DOM work and what are its benefits?",
-        "Explain the concept of CI/CD and its importance in modern software development."
-      ],
-      behavioralQuestions: [
-        "Tell me about a time when you had to debug a critical production issue under pressure.",
-        "Describe a situation where you disagreed with a team member. How did you handle it?",
-        "Share an example of a project where you had to learn a new technology quickly.",
-        "How do you prioritize tasks when working on multiple projects with tight deadlines?",
-        "Tell me about a time when you received constructive criticism. How did you respond?"
-      ]
+    // Fallback questions based on difficulty level
+    const fallbackQuestions = {
+      'beginner': {
+        technicalQuestions: [
+          "Explain the concept of variables and data types in programming.",
+          "What is version control and why is it important?",
+          "Describe the difference between front-end and back-end development.",
+          "What are the basic HTTP methods and their purposes?",
+          "Explain what a database is and give an example of when you would use one."
+        ],
+        behavioralQuestions: [
+          "Tell me about a time when you learned a new programming concept.",
+          "Describe a group project you worked on and your role in it.",
+          "How do you approach solving a coding problem you've never seen before?",
+          "What do you do when you get stuck on a technical problem?",
+          "Why are you interested in a career in this field?"
+        ]
+      },
+      'medium': {
+        technicalQuestions: [
+          "Explain the concept of closures in JavaScript and provide a practical use case.",
+          "What is the difference between SQL and NoSQL databases? When would you use each?",
+          "Describe the SOLID principles in object-oriented programming.",
+          "How does React's Virtual DOM work and what are its benefits?",
+          "Explain the concept of CI/CD and its importance in modern software development."
+        ],
+        behavioralQuestions: [
+          "Tell me about a time when you had to debug a critical production issue under pressure.",
+          "Describe a situation where you disagreed with a team member. How did you handle it?",
+          "Share an example of a project where you had to learn a new technology quickly.",
+          "How do you prioritize tasks when working on multiple projects with tight deadlines?",
+          "Tell me about a time when you received constructive criticism. How did you respond?"
+        ]
+      },
+      'advanced': {
+        technicalQuestions: [
+          "Design a scalable microservices architecture for a high-traffic e-commerce platform.",
+          "Explain how you would implement a distributed caching system and handle cache invalidation.",
+          "Describe the trade-offs between different database replication strategies.",
+          "How would you design a system to handle 1 million concurrent WebSocket connections?",
+          "Explain the CAP theorem and its implications for distributed system design."
+        ],
+        behavioralQuestions: [
+          "Describe a time when you had to lead a major architectural redesign. What challenges did you face?",
+          "How do you mentor junior engineers and help them grow in their careers?",
+          "Tell me about a time you had to make a critical technical decision with incomplete information.",
+          "Describe your approach to managing technical debt in a large codebase.",
+          "How do you handle conflict between engineering teams with different technical priorities?"
+        ]
+      }
     };
+    
+    return fallbackQuestions[difficultyLevel] || fallbackQuestions.medium;
   }
 };
 
 const analyzeCandidateAnswer = async (question, answer) => {
   try {
-    const prompt = `You are an expert interview coach. Analyze this interview answer and provide detailed feedback.
+    const prompt = `You are a strict technical interview evaluator. Analyze this interview answer and provide ACCURATE scoring from 0-100.
 
 Question: ${question}
 Answer: ${answer}
 
-Provide your analysis in JSON format:
+CRITERIA FOR SCORING (0-100):
+- 90-100: Excellent - Clear, detailed, specific examples, correct technical depth
+- 80-89: Good - Covers main points, some examples, mostly correct
+- 70-79: Average - Basic understanding, vague, lacks examples
+- 60-69: Below Average - Incomplete, technical inaccuracies
+- Below 60: Poor - Major gaps or incorrect information
+
+You MUST provide an accurate score based on content quality. Provide specific, actionable feedback.
+
+Respond with ONLY valid JSON (no markdown):
 {
-  "score": <number 0-100>,
-  "feedback": "<detailed feedback paragraph>",
-  "strengths": ["strength1", "strength2", "strength3"],
-  "improvements": ["improvement1", "improvement2", "improvement3"]
+  "score": <integer 0-100>,
+  "feedback": "<2-3 sentences of specific feedback>",
+  "strengths": ["strength1", "strength2"],
+  "improvements": ["improvement1", "improvement2"],
+  "ratingExplanation": "<brief explanation of why this score>"
 }`;
 
     const response = await callGeminiAPI(prompt);
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
     
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+    // Clean up response
+    let jsonStr = response.trim()
+      .replace(/```json\s*/g, '')
+      .replace(/```\s*/g, '')
+      .replace(/^[\s\S]*?\{/, '{')  // Remove any text before first {
+      .replace(/\}[\s\S]*$/, '}');   // Remove any text after last }
+    
+    try {
+      const parsed = JSON.parse(jsonStr);
+      
+      // Validate score
+      if (parsed.score < 0 || parsed.score > 100) {
+        parsed.score = Math.max(0, Math.min(100, parsed.score));
+      }
+      
+      // Ensure all required fields
+      return {
+        score: parsed.score || 75,
+        feedback: parsed.feedback || "Your answer shows understanding. Consider adding more specific examples.",
+        strengths: parsed.strengths || ["Clear communication"],
+        improvements: parsed.improvements || ["Add more specific examples"],
+        ratingExplanation: parsed.ratingExplanation || "Based on general answer quality"
+      };
+    } catch (parseError) {
+      console.error('JSON parse error:', parseError, 'Response:', response);
+      
+      // Fallback: Analyze the response for score keywords
+      const text = response.toLowerCase();
+      let score = 75;
+      
+      if (text.includes('excellent') || text.includes('outstanding') || text.includes('perfect')) {
+        score = 95;
+      } else if (text.includes('very good') || text.includes('great')) {
+        score = 85;
+      } else if (text.includes('good') || text.includes('solid')) {
+        score = 78;
+      } else if (text.includes('average') || text.includes('adequate')) {
+        score = 70;
+      } else if (text.includes('below average') || text.includes('needs improvement')) {
+        score = 60;
+      } else if (text.includes('poor') || text.includes('weak')) {
+        score = 50;
+      }
+      
+      return {
+        score: score,
+        feedback: "Your answer has been evaluated. " + (response.length > 200 ? response.substring(0, 200) + "..." : response),
+        strengths: ["Answer submitted", "Relevant to question"],
+        improvements: ["Review feedback above for specific improvements"],
+        ratingExplanation: "Score determined based on answer quality analysis"
+      };
     }
-    
-    throw new Error('Failed to parse feedback');
   } catch (error) {
     console.error('Error analyzing answer:', error);
     return {
       score: 75,
-      feedback: "Your answer shows understanding. Consider adding more specific examples and addressing potential challenges.",
-      strengths: ["Clear explanation", "Good structure"],
-      improvements: ["Add specific examples", "Discuss trade-offs"]
+      feedback: "Your answer has been received. For detailed feedback, ensure you're providing specific examples and clear explanations.",
+      strengths: ["Answer submitted", "Timely response"],
+      improvements: ["Add specific metrics", "Include real examples", "Explain technical concepts clearly"],
+      ratingExplanation: "Default score - provide more details for accurate evaluation"
     };
   }
 };
 
 const suggestBestAnswer = async (question) => {
   try {
-    const prompt = `You are an expert interview coach. For the following interview question, provide a suggested approach for answering it effectively.
+    const prompt = `You are an expert technical interviewer. Provide a COMPLETE SAMPLE ANSWER for this interview question that would score 95+/100.
 
 Question: ${question}
 
-Provide a comprehensive guide on how to structure and deliver a strong answer. Include key points to cover, examples to mention, and tips for making the answer compelling.`;
+Provide a complete, well-structured answer that includes:
+1. Clear introduction/overview
+2. Specific technical details and examples
+3. Personal experience/real scenarios
+4. Results/outcomes with metrics
+5. Key takeaways/learnings
 
-    return await callGeminiAPI(prompt);
+FORMAT THE ANSWER AS FOLLOWS:
+SAMPLE ANSWER:
+[Start with a complete paragraph introducing your approach]
+
+DETAILED EXPLANATION:
+• [Break down the key components]
+• [Include specific examples]
+• [Mention technologies/tools used]
+• [Discuss challenges and solutions]
+
+EXAMPLE SCENARIO:
+• [Describe a real project/situation]
+• [Include numbers/metrics/results]
+• [Explain your role and actions]
+
+KEY POINTS TO REMEMBER:
+• [Summarize critical elements]
+• [Common pitfalls to avoid]
+• [How to adapt to similar questions]
+
+Make the answer:
+- 250-400 words total
+- Professional but conversational
+- Include specific numbers ("improved performance by 40%", "reduced latency from 200ms to 50ms")
+- Reference real technologies and tools
+- Show both technical depth and communication skills`;
+
+    const response = await callGeminiAPI(prompt);
+    
+    // Format for display with sections
+    const formatted = formatAnswerWithSections(response);
+    return formatted;
   } catch (error) {
     console.error('Error suggesting answer:', error);
-    return "A comprehensive answer should start by defining the key concepts, then provide a specific example from your experience. Use the STAR method (Situation, Task, Action, Result) to structure your response.";
+    return formatAnswerWithSections(`SAMPLE ANSWER:
+When addressing "${question}", I would approach it by first understanding the core requirements and then applying systematic problem-solving.
+
+DETAILED EXPLANATION:
+• Start by clarifying the problem scope and constraints
+• Break down complex problems into manageable components
+• Apply relevant design patterns or architectural principles
+• Consider edge cases and failure scenarios
+• Optimize for performance, scalability, and maintainability
+
+EXAMPLE SCENARIO:
+• In my previous role, I implemented a caching solution using Redis
+• This reduced API response times from 300ms to 50ms (83% improvement)
+• The system handled 10,000+ concurrent users with 99.9% uptime
+• I used monitoring tools like New Relic to track performance metrics
+
+KEY POINTS TO REMEMBER:
+• Always start with requirements clarification
+• Discuss trade-offs between different approaches
+• Include specific metrics and results
+• Show how you learned from the experience
+• Connect back to business impact`);
   }
 };
 
@@ -528,6 +901,71 @@ const VoiceRecorder = ({ onTranscription }) => {
   );
 };
 
+// Structured Suggestion Display Component
+const StructuredSuggestion = ({ suggestion }) => {
+  if (!suggestion) return null;
+  
+  if (!suggestion.isStructured) {
+    return (
+      <div className="text-sm whitespace-pre-line bg-gray-900/30 p-4 rounded-lg">
+        {suggestion.content}
+      </div>
+    );
+  }
+  
+  return (
+    <div className="space-y-6">
+      {suggestion.sections.map((section, index) => (
+        <div key={index} className="space-y-3">
+          {section.title && (
+            <h5 className={`font-bold ${
+              section.title === 'SAMPLE ANSWER' 
+                ? 'text-green-400 text-lg' 
+                : 'text-blue-300 text-sm'
+            }`}>
+              {section.title}
+              {section.title === 'SAMPLE ANSWER' && (
+                <span className="ml-2 text-sm text-yellow-400">(Score: 95+/100)</span>
+              )}
+            </h5>
+          )}
+          
+          {section.points.length > 0 && (
+            <div className="pl-4 space-y-2">
+              {section.title === 'SAMPLE ANSWER' ? (
+                <div className="text-gray-200 bg-gray-900/50 p-4 rounded-lg border-l-4 border-green-500">
+                  {section.points.map((point, pointIndex) => (
+                    <p key={pointIndex} className="mb-2 last:mb-0">
+                      {point}
+                    </p>
+                  ))}
+                </div>
+              ) : section.points.every(p => p.includes('•') || p.includes('-')) ? (
+                <ul className="space-y-2">
+                  {section.points.map((point, pointIndex) => (
+                    <li key={pointIndex} className="flex items-start">
+                      <span className="text-blue-400 mr-2 mt-1">•</span>
+                      <span className="text-gray-300">{point}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="text-gray-300">
+                  {section.points.map((point, pointIndex) => (
+                    <div key={pointIndex} className="mb-2 last:mb-0">
+                      {point}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+};
+
 // Question Card Component
 const QuestionCard = ({ question, index, type }) => {
   const [state, setState] = useStore(s => s);
@@ -628,6 +1066,11 @@ const QuestionCard = ({ question, index, type }) => {
                   </ul>
                 </div>
               </div>
+              {feedback.ratingExplanation && (
+                <div className="mt-2 text-xs text-gray-400 italic">
+                  {feedback.ratingExplanation}
+                </div>
+              )}
             </div>
           )}
 
@@ -635,9 +1078,11 @@ const QuestionCard = ({ question, index, type }) => {
             <div className="p-4 bg-purple-900/20 border border-purple-700 rounded-lg">
               <h4 className="font-semibold mb-2 flex items-center gap-2">
                 <Lightbulb size={18} />
-                Suggested Answer Approach
+                Complete Sample Answer (95+/100)
               </h4>
-              <p className="text-sm">{suggestion}</p>
+              <div className="text-sm">
+                <StructuredSuggestion suggestion={suggestion} />
+              </div>
             </div>
           )}
         </div>
@@ -784,6 +1229,11 @@ const InteractiveInterview = () => {
                 </ul>
               </div>
             </div>
+            {feedback.ratingExplanation && (
+              <div className="mt-2 text-xs text-gray-400 italic">
+                {feedback.ratingExplanation}
+              </div>
+            )}
           </div>
         )}
 
@@ -791,9 +1241,11 @@ const InteractiveInterview = () => {
           <div className="p-4 bg-purple-900/20 border border-purple-700 rounded-lg">
             <h4 className="font-semibold mb-2 flex items-center gap-2">
               <Lightbulb size={18} />
-              Suggested Answer Approach
+              Complete Sample Answer (95+/100)
             </h4>
-            <p className="text-sm">{suggestion}</p>
+            <div className="text-sm">
+              <StructuredSuggestion suggestion={suggestion} />
+            </div>
           </div>
         )}
 
@@ -872,6 +1324,57 @@ const InterviewWorkspace = () => {
   );
 };
 
+// Level Selection Component
+const LevelSelection = ({ onNext }) => {
+  const [, setState] = useStore();
+  const [selectedLevel, setSelectedLevel] = useState(null);
+
+  const levels = [
+    { id: 'beginner', name: 'Beginner', icon: '🌱', description: 'Entry-level / Junior positions', details: ['Fundamental concepts', 'Basic implementations'] },
+    { id: 'medium', name: 'Intermediate', icon: '🚀', description: 'Mid-level positions', details: ['Practical experience', 'Problem solving'] },
+    { id: 'advanced', name: 'Advanced', icon: '⭐', description: 'Senior / Expert positions', details: ['System architecture', 'Leadership'] }
+  ];
+
+  return (
+    <div className="max-w-5xl mx-auto space-y-8">
+      <div className="text-center">
+        <h2 className="text-3xl font-bold mb-3">Select Your Interview Level</h2>
+        <p className="text-gray-400">Choose the difficulty level that matches your experience</p>
+      </div>
+      <div className="grid md:grid-cols-3 gap-6">
+        {levels.map((level) => (
+          <button
+            key={level.id}
+            onClick={() => {
+              setSelectedLevel(level.id);
+              setState({ difficultyLevel: level.id, selectedLevel: level.id });
+            }}
+            className={`p-6 rounded-lg border-2 transition-all hover:scale-105 text-left ${
+              selectedLevel === level.id ? 'border-blue-500 bg-blue-900/30' : 'border-gray-700 bg-gray-800'
+            }`}
+          >
+            <div className="text-4xl mb-3">{level.icon}</div>
+            <h3 className="text-xl font-bold mb-2">{level.name}</h3>
+            <p className="text-sm text-gray-400 mb-4">{level.description}</p>
+            <ul className="space-y-1">
+              {level.details.map((detail, idx) => (
+                <li key={idx} className="text-xs text-gray-300">• {detail}</li>
+              ))}
+            </ul>
+          </button>
+        ))}
+      </div>
+      {selectedLevel && (
+        <div className="text-center">
+          <button onClick={onNext} className="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-lg font-semibold">
+            Continue to Upload Resume <ChevronRight className="inline ml-2" size={20} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // Mode Selection Component
 const ModeSelection = () => {
   const [, setState] = useStore(s => s);
@@ -879,7 +1382,7 @@ const ModeSelection = () => {
   return (
     <div className="max-w-4xl mx-auto">
       <h2 className="text-3xl font-bold text-center mb-8">Choose Your Interview Mode</h2>
-      <div className="grid md:grid-cols-2 gap-6">
+      <div className="grid md:grid-cols-3 gap-6">
         <button
           onClick={() => setState({ interviewMode: 'classic' })}
           className="p-8 bg-gray-800 border-2 border-gray-700 hover:border-blue-500 rounded-lg transition-all hover:scale-105"
@@ -909,14 +1412,180 @@ const ModeSelection = () => {
             <li>• Follow-up questions available</li>
           </ul>
         </button>
+
+        <button
+          onClick={() => setState({ interviewMode: 'analytics' })}
+          className="p-8 bg-gradient-to-br from-blue-900/50 to-purple-900/50 border-2 border-blue-700 hover:border-blue-500 rounded-lg transition-all hover:scale-105"
+        >
+          <div className="text-4xl mb-3">📊</div>
+          <h3 className="text-2xl font-bold mb-4">Analytics Mode</h3>
+          <p className="text-gray-400 mb-4">
+            View your performance dashboard with detailed metrics and improvement insights.
+          </p>
+          <ul className="text-sm text-left space-y-2 text-gray-300">
+            <li>• Performance tracking</li>
+            <li>• Score analytics</li>
+            <li>• Improvement suggestions</li>
+          </ul>
+        </button>
       </div>
+    </div>
+  );
+};
+
+// Performance Dashboard Component
+const PerformanceDashboard = () => {
+  const [state] = useStore();
+  const { feedback, answers, technicalQuestions, behavioralQuestions } = state;
+
+  const calculateStats = () => {
+    const allFeedback = Object.values(feedback);
+    const allAnswers = Object.values(answers);
+    const totalQuestions = technicalQuestions.length + behavioralQuestions.length;
+    const answeredQuestions = allAnswers.length;
+    
+    let avgScore = 0;
+    if (allFeedback.length > 0) {
+      avgScore = Math.round(allFeedback.reduce((sum, f) => sum + (f.score || 0), 0) / allFeedback.length);
+    }
+    
+    const completionRate = totalQuestions > 0 ? Math.round((answeredQuestions / totalQuestions) * 100) : 0;
+    
+    // Calculate scores by question type
+    const technicalScores = [];
+    const behavioralScores = [];
+    
+    Object.keys(feedback).forEach(key => {
+      if (key.startsWith('technical-') && feedback[key].score) {
+        technicalScores.push(feedback[key].score);
+      } else if (key.startsWith('behavioral-') && feedback[key].score) {
+        behavioralScores.push(feedback[key].score);
+      }
+    });
+    
+    const avgTechnicalScore = technicalScores.length > 0 
+      ? Math.round(technicalScores.reduce((a, b) => a + b, 0) / technicalScores.length)
+      : 0;
+      
+    const avgBehavioralScore = behavioralScores.length > 0
+      ? Math.round(behavioralScores.reduce((a, b) => a + b, 0) / behavioralScores.length)
+      : 0;
+
+    return {
+      totalQuestions,
+      answeredQuestions,
+      averageScore: avgScore,
+      completionRate,
+      avgTechnicalScore,
+      avgBehavioralScore,
+      technicalAnswered: technicalScores.length,
+      behavioralAnswered: behavioralScores.length
+    };
+  };
+
+  const stats = calculateStats();
+
+  return (
+    <div className="max-w-6xl mx-auto space-y-6">
+      <h2 className="text-3xl font-bold flex items-center gap-3">
+        <BarChart3 size={32} /> Performance Analytics
+      </h2>
+      
+      <div className="grid md:grid-cols-4 gap-4">
+        <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
+          <Target className="text-blue-400 mb-2" size={24} />
+          <div className="text-2xl font-bold">{stats.completionRate}%</div>
+          <div className="text-sm text-gray-400">Completion Rate</div>
+        </div>
+        
+        <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
+          <Award className="text-green-400 mb-2" size={24} />
+          <div className="text-2xl font-bold">{stats.averageScore}</div>
+          <div className="text-sm text-gray-400">Average Score</div>
+        </div>
+        
+        <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
+          <TrendingUp className="text-yellow-400 mb-2" size={24} />
+          <div className="text-2xl font-bold">{stats.avgTechnicalScore}</div>
+          <div className="text-sm text-gray-400">Technical Score</div>
+        </div>
+        
+        <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
+          <CheckCircle className="text-purple-400 mb-2" size={24} />
+          <div className="text-2xl font-bold">{stats.avgBehavioralScore}</div>
+          <div className="text-sm text-gray-400">Behavioral Score</div>
+        </div>
+      </div>
+
+      {stats.answeredQuestions > 0 ? (
+        <div className="grid md:grid-cols-2 gap-6">
+          <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
+            <h3 className="text-xl font-bold mb-4">Progress Overview</h3>
+            <div className="space-y-4">
+              <div>
+                <div className="flex justify-between mb-1">
+                  <span className="text-sm">Technical Questions</span>
+                  <span className="text-sm">{stats.technicalAnswered}/{technicalQuestions.length}</span>
+                </div>
+                <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-blue-500"
+                    style={{ width: `${(stats.technicalAnswered / technicalQuestions.length) * 100}%` }}
+                  />
+                </div>
+              </div>
+              
+              <div>
+                <div className="flex justify-between mb-1">
+                  <span className="text-sm">Behavioral Questions</span>
+                  <span className="text-sm">{stats.behavioralAnswered}/{behavioralQuestions.length}</span>
+                </div>
+                <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-purple-500"
+                    style={{ width: `${(stats.behavioralAnswered / behavioralQuestions.length) * 100}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
+            <h3 className="text-xl font-bold mb-4">Improvement Tips</h3>
+            <ul className="space-y-2 text-sm">
+              <li className="flex items-start gap-2">
+                <div className="text-green-400 mt-1">✓</div>
+                <span>Focus on providing specific examples in your answers</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <div className="text-green-400 mt-1">✓</div>
+                <span>Use the STAR method for behavioral questions</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <div className="text-green-400 mt-1">✓</div>
+                <span>Practice explaining technical concepts in simple terms</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <div className="text-green-400 mt-1">✓</div>
+                <span>Review feedback for each question to identify patterns</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-blue-900/30 border border-blue-700 rounded-lg p-8 text-center">
+          <div className="text-6xl mb-4">📝</div>
+          <p className="text-xl mb-2">Start answering questions to see your performance analytics!</p>
+          <p className="text-gray-400">Your scores and improvement suggestions will appear here as you practice.</p>
+        </div>
+      )}
     </div>
   );
 };
 
 // Resume Uploader Component
 const ResumeUploader = ({ onAnalyze }) => {
-  const [, setState] = useStore(s => s);
+  const [state, setState] = useStore(s => s);
   const [file, setFile] = useState(null);
   const [jobDesc, setJobDesc] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -927,8 +1596,8 @@ const ResumeUploader = ({ onAnalyze }) => {
     const selectedFile = e.target.files[0];
     if (selectedFile) {
       const ext = selectedFile.name.split('.').pop().toLowerCase();
-      if (!['pdf', 'docx', 'doc'].includes(ext)) {
-        setToast({ message: 'Please upload only PDF or Word documents (.pdf, .docx, .doc)', type: 'error' });
+      if (!['pdf', 'docx', 'doc', 'txt'].includes(ext)) {
+        setToast({ message: 'Please upload only PDF, Word documents, or text files (.pdf, .docx, .doc, .txt)', type: 'error' });
         return;
       }
       setFile(selectedFile);
@@ -943,16 +1612,28 @@ const ResumeUploader = ({ onAnalyze }) => {
 
     setIsAnalyzing(true);
     try {
-      const result = await analyzeResumeAndGenerateQuestions(file, jobDesc);
+      console.log('Starting resume analysis and question generation...');
+      const result = await analyzeResumeAndGenerateQuestions(file, jobDesc, state.difficultyLevel);
+      console.log('Questions generated successfully:', {
+        technical: result.technicalQuestions?.length,
+        behavioral: result.behavioralQuestions?.length
+      });
+      
       setState({
         resumeFile: file,
         jobDescription: jobDesc,
-        technicalQuestions: result.technicalQuestions,
-        behavioralQuestions: result.behavioralQuestions
+        technicalQuestions: result.technicalQuestions || [],
+        behavioralQuestions: result.behavioralQuestions || []
       });
+      
       onAnalyze();
+      setToast({ message: 'Resume analyzed successfully! Questions generated.', type: 'success' });
     } catch (error) {
-      setToast({ message: 'Failed to analyze resume. Please try again.', type: 'error' });
+      console.error('Error in handleAnalyze:', error);
+      setToast({ 
+        message: error.message || 'Failed to analyze resume. Please try again with a valid resume document.', 
+        type: 'error' 
+      });
     } finally {
       setIsAnalyzing(false);
     }
@@ -962,13 +1643,27 @@ const ResumeUploader = ({ onAnalyze }) => {
     <div className="max-w-2xl mx-auto space-y-6">
       {toast && <Toast {...toast} onClose={() => setToast(null)} />}
       
+      {state.selectedLevel && (
+        <div className="bg-blue-900/30 border border-blue-700 rounded-lg p-4 text-center">
+          <span className="text-lg font-semibold">
+            Selected Level: {state.selectedLevel.charAt(0).toUpperCase() + state.selectedLevel.slice(1)}
+          </span>
+          <button 
+            onClick={() => setState({ selectedLevel: null, difficultyLevel: 'medium' })}
+            className="ml-4 text-sm text-blue-300 hover:text-blue-100"
+          >
+            Change
+          </button>
+        </div>
+      )}
+      
       <div className="bg-gray-800 border border-gray-700 rounded-lg p-8 space-y-6">
         <div>
           <label className="block text-sm font-medium mb-3">Upload Your Resume *</label>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.docx,.doc"
+            accept=".pdf,.docx,.doc,.txt"
             onChange={handleFileChange}
             className="hidden"
           />
@@ -977,8 +1672,11 @@ const ResumeUploader = ({ onAnalyze }) => {
             className="w-full flex items-center justify-center gap-3 px-4 py-8 border-2 border-dashed border-gray-600 hover:border-blue-500 rounded-lg transition-colors"
           >
             <Upload size={24} />
-            <span>{file ? file.name : 'Click to upload resume (PDF, DOCX, DOC)'}</span>
+            <span>{file ? file.name : 'Click to upload resume (PDF, DOCX, DOC, TXT)'}</span>
           </button>
+          <p className="text-xs text-gray-500 mt-2">
+            Accepted formats: PDF, DOCX, DOC, TXT. File must contain resume content with sections like Experience, Education, Skills.
+          </p>
         </div>
 
         <div>
@@ -999,11 +1697,11 @@ const ResumeUploader = ({ onAnalyze }) => {
           {isAnalyzing ? (
             <>
               <Loader2 className="animate-spin" size={24} />
-              Analyzing Resume...
+              Analyzing Resume & Generating Questions...
             </>
           ) : (
             <>
-              Analyze & Start
+              Analyze & Generate Questions
               <ChevronRight size={24} />
             </>
           )}
@@ -1017,11 +1715,7 @@ const ResumeUploader = ({ onAnalyze }) => {
 export default function CareerForgeAI() {
   const [state] = useStore(s => s);
   const [page, setPage] = useState('home');
-  const [currentYear, setCurrentYear] = useState('');
-
-  useEffect(() => {
-    setCurrentYear(new Date().getFullYear().toString());
-  }, []);
+  const [showLevelSelection, setShowLevelSelection] = useState(true);
 
   const hasQuestions = state.technicalQuestions.length > 0 || state.behavioralQuestions.length > 0;
 
@@ -1034,17 +1728,28 @@ export default function CareerForgeAI() {
             <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
               CareerForge AI
             </h1>
-            {page === 'interview' && (
-              <button
-                onClick={() => {
-                  setPage('home');
-                  window.location.reload();
-                }}
-                className="px-4 py-2 text-sm bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
-              >
-                Start New Session
-              </button>
-            )}
+            <div className="flex items-center gap-3">
+              {page === 'interview' && state.interviewMode && (
+                <button
+                  onClick={() => store.setState({ interviewMode: null })}
+                  className="px-4 py-2 text-sm bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors"
+                >
+                  Change Mode
+                </button>
+              )}
+              {page === 'interview' && (
+                <button
+                  onClick={() => {
+                    setPage('home');
+                    setShowLevelSelection(true);
+                    window.location.reload();
+                  }}
+                  className="px-4 py-2 text-sm bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
+                >
+                  Start New Session
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -1059,7 +1764,12 @@ export default function CareerForgeAI() {
                 Upload your resume and get AI-powered interview preparation
               </p>
             </div>
-            <ResumeUploader onAnalyze={() => setPage('interview')} />
+            
+            {showLevelSelection ? (
+              <LevelSelection onNext={() => setShowLevelSelection(false)} />
+            ) : (
+              <ResumeUploader onAnalyze={() => setPage('interview')} />
+            )}
           </div>
         )}
 
@@ -1069,8 +1779,10 @@ export default function CareerForgeAI() {
               <ModeSelection />
             ) : state.interviewMode === 'classic' ? (
               <InterviewWorkspace />
-            ) : (
+            ) : state.interviewMode === 'interactive' ? (
               <InteractiveInterview />
+            ) : (
+              <PerformanceDashboard />
             )}
           </div>
         )}
