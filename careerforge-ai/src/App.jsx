@@ -1,6 +1,6 @@
 /* eslint-disable no-unused-vars */
 import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react';
-import { Upload, Mic, MicOff, ChevronRight, Lightbulb, CheckCircle, AlertCircle, Loader2, TrendingUp, Award, Target, BarChart3 } from 'lucide-react';
+import { Upload, Mic, MicOff, ChevronRight, Lightbulb, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 
 // Load PDF.js and Mammoth libraries
 const loadExternalLibraries = () => {
@@ -55,11 +55,7 @@ const store = createStore({
   answers: {},
   feedback: {},
   suggestions: {},
-  followUpQuestions: {},
-  questionHistory: [],
-  currentQuestion: '',
-  difficultyLevel: 'medium',
-  selectedLevel: null
+  followUpQuestions: {}
 });
 
 const useStore = (selector = (state) => state) => {
@@ -73,10 +69,9 @@ const useStore = (selector = (state) => state) => {
 };
 
 // API Configuration
-const GEMINI_API_KEY = 'AIzaSyB15IKWCIiG6mK_nR1epQ7WTjj1LGthON4';
+// eslint-disable-next-line no-undef
+const GEMINI_API_KEY = process.env.REACT_APP_GEMINI_API_KEY;
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent';
-
-// Helper function to call Gemini API
 const callGeminiAPI = async (prompt, fileData = null) => {
   try {
     const parts = [];
@@ -189,79 +184,14 @@ const extractTextFromFile = async (file) => {
   });
 };
 
-// Format suggestion text into structured format
-const formatSuggestionText = (text) => {
-  if (!text) return '';
-  
-  // Remove markdown formatting
-  let formatted = text
-    .replace(/\*\*/g, '')
-    .replace(/\*/g, '')
-    .replace(/#{1,6}\s*/g, '')
-    .replace(/```[\s\S]*?```/g, '')
-    .replace(/`/g, '');
-  
-  // Split into lines and clean up
-  const lines = formatted.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-  
-  // Group lines into sections
-  const sections = [];
-  let currentSection = { title: '', points: [] };
-  
-  for (const line of lines) {
-    if (line.match(/^(Structure|Key Points|Examples|Tips|Steps|Approach|What to Include|How to Structure|Important Notes|Do's and Don'ts):/i)) {
-      if (currentSection.title || currentSection.points.length > 0) {
-        sections.push({ ...currentSection });
-      }
-      currentSection = { title: line.replace(/:/, '').trim(), points: [] };
-    } else if (line.match(/^[•\-–—]\s+/)) {
-      currentSection.points.push(line.replace(/^[•\-–—]\s+/, '').trim());
-    } else if (line.match(/^\d+\.\s+/)) {
-      currentSection.points.push(line.replace(/^\d+\.\s+/, '').trim());
-    } else if (currentSection.title) {
-      currentSection.points.push(line);
-    } else if (line.length > 50) { // Consider long lines as new section titles
-      if (currentSection.points.length > 0) {
-        sections.push({ ...currentSection });
-      }
-      currentSection = { title: line, points: [] };
-    }
-  }
-  
-  if (currentSection.title || currentSection.points.length > 0) {
-    sections.push({ ...currentSection });
-  }
-  
-  // If we couldn't parse into sections, return as bullet points
-  if (sections.length === 0) {
-    return {
-      isStructured: false,
-      content: formatted
-    };
-  }
-  
-  return {
-    isStructured: true,
-    sections: sections
-  };
-};
-
 // AI Functions using Gemini API
-const analyzeResumeAndGenerateQuestions = async (resumeFile, jobDescription, difficultyLevel = 'medium') => {
+const analyzeResumeAndGenerateQuestions = async (resumeFile, jobDescription) => {
   try {
     const resumeData = await extractTextFromFile(resumeFile);
-    
-    const difficultyPrompt = {
-      'beginner': 'Generate basic, fundamental questions suitable for entry-level/junior positions.',
-      'medium': 'Generate practical, experience-based questions suitable for mid-level positions.',
-      'advanced': 'Generate complex, system-level and leadership questions suitable for senior/expert positions.'
-    }[difficultyLevel] || '';
     
     const prompt = `You are an expert interview coach. Analyze the resume provided and generate personalized interview questions.
 
 ${jobDescription ? `Job Description: ${jobDescription}` : 'Generate questions for a general technical role'}
-
-${difficultyPrompt}
 
 IMPORTANT: Analyze the resume content carefully and generate TWO SEPARATE types of questions based on the candidate's experience, skills, and projects mentioned in their resume:
 
@@ -269,7 +199,6 @@ IMPORTANT: Analyze the resume content carefully and generate TWO SEPARATE types 
    - Focus on technical skills, technologies, and tools mentioned in the resume
    - Ask about projects, architectures, and technical decisions they made
    - Reference specific technologies from their resume
-   - Difficulty level: ${difficultyLevel}
 
 2. BEHAVIORAL QUESTIONS (5 questions):
    - Focus on past experiences, challenges, and achievements from their resume
@@ -312,60 +241,24 @@ You MUST respond with ONLY valid JSON in this exact format (no extra text, no ma
     throw new Error('Failed to parse questions from AI response');
   } catch (error) {
     console.error('Error generating questions:', error);
+    alert(`Failed to generate questions: ${error.message}\n\nPlease check:\n1. Your API key is correct\n2. You have API quota remaining`);
     
-    // Fallback questions based on difficulty level
-    const fallbackQuestions = {
-      'beginner': {
-        technicalQuestions: [
-          "Explain the concept of variables and data types in programming.",
-          "What is version control and why is it important?",
-          "Describe the difference between front-end and back-end development.",
-          "What are the basic HTTP methods and their purposes?",
-          "Explain what a database is and give an example of when you would use one."
-        ],
-        behavioralQuestions: [
-          "Tell me about a time when you learned a new programming concept.",
-          "Describe a group project you worked on and your role in it.",
-          "How do you approach solving a coding problem you've never seen before?",
-          "What do you do when you get stuck on a technical problem?",
-          "Why are you interested in a career in this field?"
-        ]
-      },
-      'medium': {
-        technicalQuestions: [
-          "Explain the concept of closures in JavaScript and provide a practical use case.",
-          "What is the difference between SQL and NoSQL databases? When would you use each?",
-          "Describe the SOLID principles in object-oriented programming.",
-          "How does React's Virtual DOM work and what are its benefits?",
-          "Explain the concept of CI/CD and its importance in modern software development."
-        ],
-        behavioralQuestions: [
-          "Tell me about a time when you had to debug a critical production issue under pressure.",
-          "Describe a situation where you disagreed with a team member. How did you handle it?",
-          "Share an example of a project where you had to learn a new technology quickly.",
-          "How do you prioritize tasks when working on multiple projects with tight deadlines?",
-          "Tell me about a time when you received constructive criticism. How did you respond?"
-        ]
-      },
-      'advanced': {
-        technicalQuestions: [
-          "Design a scalable microservices architecture for a high-traffic e-commerce platform.",
-          "Explain how you would implement a distributed caching system and handle cache invalidation.",
-          "Describe the trade-offs between different database replication strategies.",
-          "How would you design a system to handle 1 million concurrent WebSocket connections?",
-          "Explain the CAP theorem and its implications for distributed system design."
-        ],
-        behavioralQuestions: [
-          "Describe a time when you had to lead a major architectural redesign. What challenges did you face?",
-          "How do you mentor junior engineers and help them grow in their careers?",
-          "Tell me about a time you had to make a critical technical decision with incomplete information.",
-          "Describe your approach to managing technical debt in a large codebase.",
-          "How do you handle conflict between engineering teams with different technical priorities?"
-        ]
-      }
+    return {
+      technicalQuestions: [
+        "Explain the concept of closures in JavaScript and provide a practical use case.",
+        "What is the difference between SQL and NoSQL databases? When would you use each?",
+        "Describe the SOLID principles in object-oriented programming.",
+        "How does React's Virtual DOM work and what are its benefits?",
+        "Explain the concept of CI/CD and its importance in modern software development."
+      ],
+      behavioralQuestions: [
+        "Tell me about a time when you had to debug a critical production issue under pressure.",
+        "Describe a situation where you disagreed with a team member. How did you handle it?",
+        "Share an example of a project where you had to learn a new technology quickly.",
+        "How do you prioritize tasks when working on multiple projects with tight deadlines?",
+        "Tell me about a time when you received constructive criticism. How did you respond?"
+      ]
     };
-    
-    return fallbackQuestions[difficultyLevel] || fallbackQuestions.medium;
   }
 };
 
@@ -405,60 +298,16 @@ Provide your analysis in JSON format:
 
 const suggestBestAnswer = async (question) => {
   try {
-    const prompt = `You are an expert interview coach. For the following interview question, provide a structured, easy-to-read suggested answer approach.
+    const prompt = `You are an expert interview coach. For the following interview question, provide a suggested approach for answering it effectively.
 
 Question: ${question}
 
-Provide a comprehensive guide on how to structure and deliver a strong answer. Structure your response with the following sections (use clear headings):
+Provide a comprehensive guide on how to structure and deliver a strong answer. Include key points to cover, examples to mention, and tips for making the answer compelling.`;
 
-STRUCTURE:
-- Outline the recommended structure for your answer
-
-KEY POINTS TO COVER:
-- List the main points that should be addressed
-- Include technical details if applicable
-
-EXAMPLES TO MENTION:
-- Suggest specific examples or experiences to reference
-- Include metrics or results if possible
-
-TIPS FOR SUCCESS:
-- Provide practical tips for delivering the answer
-- Include what to avoid
-
-FORMAT REQUIREMENTS:
-- Use clear section headings in ALL CAPS followed by colon
-- Use bullet points (•) for all lists
-- Keep each bullet point concise (1-2 sentences max)
-- Do not write long paragraphs
-- Make it scannable and easy to read`;
-
-    const response = await callGeminiAPI(prompt);
-    return formatSuggestionText(response);
+    return await callGeminiAPI(prompt);
   } catch (error) {
     console.error('Error suggesting answer:', error);
-    return formatSuggestionText(`STRUCTURE:
-• Start with a clear definition or explanation of the concept
-• Provide a specific example from your experience
-• Use the STAR method (Situation, Task, Action, Result)
-• End with what you learned or would do differently
-
-KEY POINTS TO COVER:
-• Explain the core concept clearly
-• Relate it to your specific experience
-• Discuss challenges faced and how you overcame them
-• Mention the impact or results of your actions
-
-EXAMPLES TO MENTION:
-• Reference specific projects from your resume
-• Include metrics like performance improvements or cost savings
-• Mention collaboration with team members
-
-TIPS FOR SUCCESS:
-• Be concise but thorough
-• Use specific numbers and metrics
-• Practice your answer beforehand
-• Show enthusiasm and confidence`);
+    return "A comprehensive answer should start by defining the key concepts, then provide a specific example from your experience. Use the STAR method (Situation, Task, Action, Result) to structure your response.";
   }
 };
 
@@ -679,39 +528,6 @@ const VoiceRecorder = ({ onTranscription }) => {
   );
 };
 
-// Structured Suggestion Display Component
-const StructuredSuggestion = ({ suggestion }) => {
-  if (!suggestion) return null;
-  
-  if (!suggestion.isStructured) {
-    return (
-      <div className="text-sm whitespace-pre-line">{suggestion.content}</div>
-    );
-  }
-  
-  return (
-    <div className="space-y-4">
-      {suggestion.sections.map((section, index) => (
-        <div key={index} className="space-y-2">
-          {section.title && (
-            <h5 className="font-semibold text-purple-300 text-sm">{section.title.toUpperCase()}</h5>
-          )}
-          {section.points.length > 0 && (
-            <ul className="space-y-1 pl-4">
-              {section.points.map((point, pointIndex) => (
-                <li key={pointIndex} className="text-sm flex items-start">
-                  <span className="text-purple-400 mr-2 mt-1">•</span>
-                  <span>{point}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-};
-
 // Question Card Component
 const QuestionCard = ({ question, index, type }) => {
   const [state, setState] = useStore(s => s);
@@ -821,9 +637,7 @@ const QuestionCard = ({ question, index, type }) => {
                 <Lightbulb size={18} />
                 Suggested Answer Approach
               </h4>
-              <div className="text-sm">
-                <StructuredSuggestion suggestion={suggestion} />
-              </div>
+              <p className="text-sm">{suggestion}</p>
             </div>
           )}
         </div>
@@ -979,9 +793,7 @@ const InteractiveInterview = () => {
               <Lightbulb size={18} />
               Suggested Answer Approach
             </h4>
-            <div className="text-sm">
-              <StructuredSuggestion suggestion={suggestion} />
-            </div>
+            <p className="text-sm">{suggestion}</p>
           </div>
         )}
 
@@ -1060,57 +872,6 @@ const InterviewWorkspace = () => {
   );
 };
 
-// Level Selection Component
-const LevelSelection = ({ onNext }) => {
-  const [, setState] = useStore();
-  const [selectedLevel, setSelectedLevel] = useState(null);
-
-  const levels = [
-    { id: 'beginner', name: 'Beginner', icon: '🌱', description: 'Entry-level / Junior positions', details: ['Fundamental concepts', 'Basic implementations'] },
-    { id: 'medium', name: 'Intermediate', icon: '🚀', description: 'Mid-level positions', details: ['Practical experience', 'Problem solving'] },
-    { id: 'advanced', name: 'Advanced', icon: '⭐', description: 'Senior / Expert positions', details: ['System architecture', 'Leadership'] }
-  ];
-
-  return (
-    <div className="max-w-5xl mx-auto space-y-8">
-      <div className="text-center">
-        <h2 className="text-3xl font-bold mb-3">Select Your Interview Level</h2>
-        <p className="text-gray-400">Choose the difficulty level that matches your experience</p>
-      </div>
-      <div className="grid md:grid-cols-3 gap-6">
-        {levels.map((level) => (
-          <button
-            key={level.id}
-            onClick={() => {
-              setSelectedLevel(level.id);
-              setState({ difficultyLevel: level.id, selectedLevel: level.id });
-            }}
-            className={`p-6 rounded-lg border-2 transition-all hover:scale-105 text-left ${
-              selectedLevel === level.id ? 'border-blue-500 bg-blue-900/30' : 'border-gray-700 bg-gray-800'
-            }`}
-          >
-            <div className="text-4xl mb-3">{level.icon}</div>
-            <h3 className="text-xl font-bold mb-2">{level.name}</h3>
-            <p className="text-sm text-gray-400 mb-4">{level.description}</p>
-            <ul className="space-y-1">
-              {level.details.map((detail, idx) => (
-                <li key={idx} className="text-xs text-gray-300">• {detail}</li>
-              ))}
-            </ul>
-          </button>
-        ))}
-      </div>
-      {selectedLevel && (
-        <div className="text-center">
-          <button onClick={onNext} className="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-lg font-semibold">
-            Continue to Upload Resume <ChevronRight className="inline ml-2" size={20} />
-          </button>
-        </div>
-      )}
-    </div>
-  );
-};
-
 // Mode Selection Component
 const ModeSelection = () => {
   const [, setState] = useStore(s => s);
@@ -1118,7 +879,7 @@ const ModeSelection = () => {
   return (
     <div className="max-w-4xl mx-auto">
       <h2 className="text-3xl font-bold text-center mb-8">Choose Your Interview Mode</h2>
-      <div className="grid md:grid-cols-3 gap-6">
+      <div className="grid md:grid-cols-2 gap-6">
         <button
           onClick={() => setState({ interviewMode: 'classic' })}
           className="p-8 bg-gray-800 border-2 border-gray-700 hover:border-blue-500 rounded-lg transition-all hover:scale-105"
@@ -1148,180 +909,14 @@ const ModeSelection = () => {
             <li>• Follow-up questions available</li>
           </ul>
         </button>
-
-        <button
-          onClick={() => setState({ interviewMode: 'analytics' })}
-          className="p-8 bg-gradient-to-br from-blue-900/50 to-purple-900/50 border-2 border-blue-700 hover:border-blue-500 rounded-lg transition-all hover:scale-105"
-        >
-          <div className="text-4xl mb-3">📊</div>
-          <h3 className="text-2xl font-bold mb-4">Analytics Mode</h3>
-          <p className="text-gray-400 mb-4">
-            View your performance dashboard with detailed metrics and improvement insights.
-          </p>
-          <ul className="text-sm text-left space-y-2 text-gray-300">
-            <li>• Performance tracking</li>
-            <li>• Score analytics</li>
-            <li>• Improvement suggestions</li>
-          </ul>
-        </button>
       </div>
-    </div>
-  );
-};
-
-// Performance Dashboard Component
-const PerformanceDashboard = () => {
-  const [state] = useStore();
-  const { feedback, answers, technicalQuestions, behavioralQuestions } = state;
-
-  const calculateStats = () => {
-    const allFeedback = Object.values(feedback);
-    const allAnswers = Object.values(answers);
-    const totalQuestions = technicalQuestions.length + behavioralQuestions.length;
-    const answeredQuestions = allAnswers.length;
-    
-    let avgScore = 0;
-    if (allFeedback.length > 0) {
-      avgScore = Math.round(allFeedback.reduce((sum, f) => sum + (f.score || 0), 0) / allFeedback.length);
-    }
-    
-    const completionRate = totalQuestions > 0 ? Math.round((answeredQuestions / totalQuestions) * 100) : 0;
-    
-    // Calculate scores by question type
-    const technicalScores = [];
-    const behavioralScores = [];
-    
-    Object.keys(feedback).forEach(key => {
-      if (key.startsWith('technical-') && feedback[key].score) {
-        technicalScores.push(feedback[key].score);
-      } else if (key.startsWith('behavioral-') && feedback[key].score) {
-        behavioralScores.push(feedback[key].score);
-      }
-    });
-    
-    const avgTechnicalScore = technicalScores.length > 0 
-      ? Math.round(technicalScores.reduce((a, b) => a + b, 0) / technicalScores.length)
-      : 0;
-      
-    const avgBehavioralScore = behavioralScores.length > 0
-      ? Math.round(behavioralScores.reduce((a, b) => a + b, 0) / behavioralScores.length)
-      : 0;
-
-    return {
-      totalQuestions,
-      answeredQuestions,
-      averageScore: avgScore,
-      completionRate,
-      avgTechnicalScore,
-      avgBehavioralScore,
-      technicalAnswered: technicalScores.length,
-      behavioralAnswered: behavioralScores.length
-    };
-  };
-
-  const stats = calculateStats();
-
-  return (
-    <div className="max-w-6xl mx-auto space-y-6">
-      <h2 className="text-3xl font-bold flex items-center gap-3">
-        <BarChart3 size={32} /> Performance Analytics
-      </h2>
-      
-      <div className="grid md:grid-cols-4 gap-4">
-        <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
-          <Target className="text-blue-400 mb-2" size={24} />
-          <div className="text-2xl font-bold">{stats.completionRate}%</div>
-          <div className="text-sm text-gray-400">Completion Rate</div>
-        </div>
-        
-        <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
-          <Award className="text-green-400 mb-2" size={24} />
-          <div className="text-2xl font-bold">{stats.averageScore}</div>
-          <div className="text-sm text-gray-400">Average Score</div>
-        </div>
-        
-        <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
-          <TrendingUp className="text-yellow-400 mb-2" size={24} />
-          <div className="text-2xl font-bold">{stats.avgTechnicalScore}</div>
-          <div className="text-sm text-gray-400">Technical Score</div>
-        </div>
-        
-        <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
-          <CheckCircle className="text-purple-400 mb-2" size={24} />
-          <div className="text-2xl font-bold">{stats.avgBehavioralScore}</div>
-          <div className="text-sm text-gray-400">Behavioral Score</div>
-        </div>
-      </div>
-
-      {stats.answeredQuestions > 0 ? (
-        <div className="grid md:grid-cols-2 gap-6">
-          <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
-            <h3 className="text-xl font-bold mb-4">Progress Overview</h3>
-            <div className="space-y-4">
-              <div>
-                <div className="flex justify-between mb-1">
-                  <span className="text-sm">Technical Questions</span>
-                  <span className="text-sm">{stats.technicalAnswered}/{technicalQuestions.length}</span>
-                </div>
-                <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-blue-500"
-                    style={{ width: `${(stats.technicalAnswered / technicalQuestions.length) * 100}%` }}
-                  />
-                </div>
-              </div>
-              
-              <div>
-                <div className="flex justify-between mb-1">
-                  <span className="text-sm">Behavioral Questions</span>
-                  <span className="text-sm">{stats.behavioralAnswered}/{behavioralQuestions.length}</span>
-                </div>
-                <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-purple-500"
-                    style={{ width: `${(stats.behavioralAnswered / behavioralQuestions.length) * 100}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
-            <h3 className="text-xl font-bold mb-4">Improvement Tips</h3>
-            <ul className="space-y-2 text-sm">
-              <li className="flex items-start gap-2">
-                <div className="text-green-400 mt-1">✓</div>
-                <span>Focus on providing specific examples in your answers</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <div className="text-green-400 mt-1">✓</div>
-                <span>Use the STAR method for behavioral questions</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <div className="text-green-400 mt-1">✓</div>
-                <span>Practice explaining technical concepts in simple terms</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <div className="text-green-400 mt-1">✓</div>
-                <span>Review feedback for each question to identify patterns</span>
-              </li>
-            </ul>
-          </div>
-        </div>
-      ) : (
-        <div className="bg-blue-900/30 border border-blue-700 rounded-lg p-8 text-center">
-          <div className="text-6xl mb-4">📝</div>
-          <p className="text-xl mb-2">Start answering questions to see your performance analytics!</p>
-          <p className="text-gray-400">Your scores and improvement suggestions will appear here as you practice.</p>
-        </div>
-      )}
     </div>
   );
 };
 
 // Resume Uploader Component
 const ResumeUploader = ({ onAnalyze }) => {
-  const [state, setState] = useStore(s => s);
+  const [, setState] = useStore(s => s);
   const [file, setFile] = useState(null);
   const [jobDesc, setJobDesc] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -1332,8 +927,8 @@ const ResumeUploader = ({ onAnalyze }) => {
     const selectedFile = e.target.files[0];
     if (selectedFile) {
       const ext = selectedFile.name.split('.').pop().toLowerCase();
-      if (!['pdf', 'docx', 'doc', 'txt'].includes(ext)) {
-        setToast({ message: 'Please upload only PDF, Word documents, or text files (.pdf, .docx, .doc, .txt)', type: 'error' });
+      if (!['pdf', 'docx', 'doc'].includes(ext)) {
+        setToast({ message: 'Please upload only PDF or Word documents (.pdf, .docx, .doc)', type: 'error' });
         return;
       }
       setFile(selectedFile);
@@ -1348,7 +943,7 @@ const ResumeUploader = ({ onAnalyze }) => {
 
     setIsAnalyzing(true);
     try {
-      const result = await analyzeResumeAndGenerateQuestions(file, jobDesc, state.difficultyLevel);
+      const result = await analyzeResumeAndGenerateQuestions(file, jobDesc);
       setState({
         resumeFile: file,
         jobDescription: jobDesc,
@@ -1367,27 +962,13 @@ const ResumeUploader = ({ onAnalyze }) => {
     <div className="max-w-2xl mx-auto space-y-6">
       {toast && <Toast {...toast} onClose={() => setToast(null)} />}
       
-      {state.selectedLevel && (
-        <div className="bg-blue-900/30 border border-blue-700 rounded-lg p-4 text-center">
-          <span className="text-lg font-semibold">
-            Selected Level: {state.selectedLevel.charAt(0).toUpperCase() + state.selectedLevel.slice(1)}
-          </span>
-          <button 
-            onClick={() => setState({ selectedLevel: null, difficultyLevel: 'medium' })}
-            className="ml-4 text-sm text-blue-300 hover:text-blue-100"
-          >
-            Change
-          </button>
-        </div>
-      )}
-      
       <div className="bg-gray-800 border border-gray-700 rounded-lg p-8 space-y-6">
         <div>
           <label className="block text-sm font-medium mb-3">Upload Your Resume *</label>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.docx,.doc,.txt"
+            accept=".pdf,.docx,.doc"
             onChange={handleFileChange}
             className="hidden"
           />
@@ -1396,7 +977,7 @@ const ResumeUploader = ({ onAnalyze }) => {
             className="w-full flex items-center justify-center gap-3 px-4 py-8 border-2 border-dashed border-gray-600 hover:border-blue-500 rounded-lg transition-colors"
           >
             <Upload size={24} />
-            <span>{file ? file.name : 'Click to upload resume (PDF, DOCX, DOC, TXT)'}</span>
+            <span>{file ? file.name : 'Click to upload resume (PDF, DOCX, DOC)'}</span>
           </button>
         </div>
 
@@ -1436,7 +1017,11 @@ const ResumeUploader = ({ onAnalyze }) => {
 export default function CareerForgeAI() {
   const [state] = useStore(s => s);
   const [page, setPage] = useState('home');
-  const [showLevelSelection, setShowLevelSelection] = useState(true);
+  const [currentYear, setCurrentYear] = useState('');
+
+  useEffect(() => {
+    setCurrentYear(new Date().getFullYear().toString());
+  }, []);
 
   const hasQuestions = state.technicalQuestions.length > 0 || state.behavioralQuestions.length > 0;
 
@@ -1449,28 +1034,17 @@ export default function CareerForgeAI() {
             <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
               CareerForge AI
             </h1>
-            <div className="flex items-center gap-3">
-              {page === 'interview' && state.interviewMode && (
-                <button
-                  onClick={() => store.setState({ interviewMode: null })}
-                  className="px-4 py-2 text-sm bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors"
-                >
-                  Change Mode
-                </button>
-              )}
-              {page === 'interview' && (
-                <button
-                  onClick={() => {
-                    setPage('home');
-                    setShowLevelSelection(true);
-                    window.location.reload();
-                  }}
-                  className="px-4 py-2 text-sm bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
-                >
-                  Start New Session
-                </button>
-              )}
-            </div>
+            {page === 'interview' && (
+              <button
+                onClick={() => {
+                  setPage('home');
+                  window.location.reload();
+                }}
+                className="px-4 py-2 text-sm bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
+              >
+                Start New Session
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -1485,12 +1059,7 @@ export default function CareerForgeAI() {
                 Upload your resume and get AI-powered interview preparation
               </p>
             </div>
-            
-            {showLevelSelection ? (
-              <LevelSelection onNext={() => setShowLevelSelection(false)} />
-            ) : (
-              <ResumeUploader onAnalyze={() => setPage('interview')} />
-            )}
+            <ResumeUploader onAnalyze={() => setPage('interview')} />
           </div>
         )}
 
@@ -1500,10 +1069,8 @@ export default function CareerForgeAI() {
               <ModeSelection />
             ) : state.interviewMode === 'classic' ? (
               <InterviewWorkspace />
-            ) : state.interviewMode === 'interactive' ? (
-              <InteractiveInterview />
             ) : (
-              <PerformanceDashboard />
+              <InteractiveInterview />
             )}
           </div>
         )}
