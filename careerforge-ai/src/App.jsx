@@ -71,13 +71,7 @@ const useStore = (selector = (state) => state) => {
   
   return [state, store.setState];
 };
-
-// API Configuration
-<<<<<<< HEAD
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-=======
-const GEMINI_API_KEY = 'YOUR_API_KEY';
->>>>>>> a16bea14100928736de87e25a34e115bf4c76000
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent';
 
 // Helper function to call Gemini API
