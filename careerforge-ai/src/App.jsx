@@ -101,7 +101,7 @@ const callGeminiAPI = async (prompt, fileData = null) => {
 // Fallback for local development only
 const callGeminiAPIDirect = async (prompt, fileData = null) => {
   const key = import.meta.env.VITE_GEMINI_API_KEY;
-  const url = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent';
+  const url = 'https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent';
 
   const parts = [];
   if (fileData && fileData.isBase64) {
@@ -886,8 +886,8 @@ const VoiceRecorder = ({ onTranscription }) => {
         onClick={handleRecord}
         disabled={isProcessing}
         className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isRecording
-            ? 'bg-red-500 hover:bg-red-600 animate-pulse'
-            : 'bg-blue-600 hover:bg-blue-700'
+          ? 'bg-red-500 hover:bg-red-600 animate-pulse'
+          : 'bg-blue-600 hover:bg-blue-700'
           } text-white disabled:opacity-50`}
       >
         {isProcessing ? (
@@ -924,8 +924,8 @@ const StructuredSuggestion = ({ suggestion }) => {
         <div key={index} className="space-y-3">
           {section.title && (
             <h5 className={`font-bold ${section.title === 'SAMPLE ANSWER'
-                ? 'text-green-400 text-lg'
-                : 'text-blue-300 text-sm'
+              ? 'text-green-400 text-lg'
+              : 'text-blue-300 text-sm'
               }`}>
               {section.title}
               {section.title === 'SAMPLE ANSWER' && (
@@ -1295,8 +1295,8 @@ const InterviewWorkspace = () => {
         <button
           onClick={() => setActiveTab('technical')}
           className={`px-6 py-3 font-medium transition-colors ${activeTab === 'technical'
-              ? 'border-b-2 border-blue-500 text-blue-400'
-              : 'text-gray-400 hover:text-white'
+            ? 'border-b-2 border-blue-500 text-blue-400'
+            : 'text-gray-400 hover:text-white'
             }`}
         >
           Technical ({state.technicalQuestions.length})
@@ -1304,8 +1304,8 @@ const InterviewWorkspace = () => {
         <button
           onClick={() => setActiveTab('behavioral')}
           className={`px-6 py-3 font-medium transition-colors ${activeTab === 'behavioral'
-              ? 'border-b-2 border-blue-500 text-blue-400'
-              : 'text-gray-400 hover:text-white'
+            ? 'border-b-2 border-blue-500 text-blue-400'
+            : 'text-gray-400 hover:text-white'
             }`}
         >
           Behavioral ({state.behavioralQuestions.length})
