@@ -10,7 +10,7 @@ const loadExternalLibraries = () => {
     pdfScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
     document.head.appendChild(pdfScript);
   }
-  
+
   if (!document.getElementById('mammoth-script')) {
     const mammothScript = document.createElement('script');
     mammothScript.id = 'mammoth-script';
@@ -27,7 +27,7 @@ const createStore = (initialState) => {
   const listeners = new Set();
 
   const getState = () => state;
-  
+
   const setState = (partial) => {
     const newState = typeof partial === 'function' ? partial(state) : partial;
     state = { ...state, ...newState };
@@ -68,59 +68,68 @@ const useStore = (selector = (state) => state) => {
     () => selector(store.getState()),
     () => selector(store.getState())
   );
-  
+
   return [state, store.setState];
 };
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent';
-
-// Helper function to call Gemini API
+// Helper function to call Gemini API via secure proxy
 const callGeminiAPI = async (prompt, fileData = null) => {
   try {
-    const parts = [];
-    
-    if (fileData && fileData.isBase64) {
-      parts.push({
-        inline_data: {
-          mime_type: fileData.mimeType,
-          data: fileData.data
-        }
-      });
-      parts.push({ text: prompt });
-    } else if (fileData && !fileData.isBase64) {
-      parts.push({ text: `${prompt}\n\nResume Content:\n${fileData.text}` });
-    } else {
-      parts.push({ text: prompt });
-    }
-
-    const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+    const response = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: parts }]
-      })
+      body: JSON.stringify({ prompt, fileData })
     });
 
     if (!response.ok) {
       const errorData = await response.json();
-      console.error('API Error Details:', errorData);
-      throw new Error(`API Error: ${response.status} - ${errorData.error?.message || 'Unknown error'}`);
+      throw new Error(errorData.error || 'Failed to fetch from AI');
     }
 
     const data = await response.json();
-    return data.candidates[0].content.parts[0].text;
+    return data.text;
   } catch (error) {
-    console.error('Gemini API Error:', error);
+    console.error('API Error:', error);
+    // Fallback for local development if the API route isn't available
+    if (import.meta.env.VITE_GEMINI_API_KEY && error.message.includes('Unexpected token')) {
+      console.log('API route not found, falling back to direct call (Local Dev Only)');
+      return callGeminiAPIDirect(prompt, fileData);
+    }
     throw error;
   }
 };
 
+// Fallback for local development only
+const callGeminiAPIDirect = async (prompt, fileData = null) => {
+  const key = import.meta.env.VITE_GEMINI_API_KEY;
+  const url = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent';
+
+  const parts = [];
+  if (fileData && fileData.isBase64) {
+    parts.push({ inline_data: { mime_type: fileData.mimeType, data: fileData.data } });
+    parts.push({ text: prompt });
+  } else if (fileData && !fileData.isBase64) {
+    parts.push({ text: `${prompt}\n\nResume Content:\n${fileData.text}` });
+  } else {
+    parts.push({ text: prompt });
+  }
+
+  const response = await fetch(`${url}?key=${key}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contents: [{ parts }] })
+  });
+
+  const data = await response.json();
+  return data.candidates[0].content.parts[0].text;
+};
+
+
 // Check if text is a resume
 const isResumeFormat = (text) => {
   if (!text || text.length < 100) return false;
-  
+
   const lowercaseText = text.toLowerCase();
-  
+
   // Common resume sections/keywords
   const resumeKeywords = [
     'resume', 'cv', 'curriculum vitae',
@@ -134,25 +143,25 @@ const isResumeFormat = (text) => {
     'achievements', 'accomplishments',
     'work history', 'professional experience'
   ];
-  
+
   // Check for multiple resume indicators
   let score = 0;
-  
+
   // Check for section headers
   const hasExperience = /(experience|work history|employment)/i.test(text);
   const hasEducation = /(education|academic)/i.test(text);
   const hasSkills = /(skills|technical|programming)/i.test(text);
-  
+
   // Check for date formats common in resumes
   const hasDates = /\b(20\d{2}|19\d{2}|present|current)\b/i.test(text);
-  
+
   // Check for bullet points or lists
   // eslint-disable-next-line no-useless-escape
   const hasBulletPoints = /(•|\-|\*|\d\.)/.test(text);
-  
+
   // Check for job titles
   const hasJobTitles = /\b(intern|developer|engineer|analyst|manager|director|lead|senior|junior)\b/i.test(text);
-  
+
   // Calculate score
   if (hasExperience) score += 2;
   if (hasEducation) score += 2;
@@ -160,7 +169,7 @@ const isResumeFormat = (text) => {
   if (hasDates) score += 1;
   if (hasBulletPoints) score += 1;
   if (hasJobTitles) score += 1;
-  
+
   // At least 5 points to be considered a resume
   return score >= 5;
 };
@@ -171,26 +180,26 @@ const extractTextFromFile = async (file) => {
     const reader = new FileReader();
     const fileExt = file.name.split('.').pop().toLowerCase();
     const maxSize = 10 * 1024 * 1024;
-    
+
     if (file.size > maxSize) {
       reject(new Error('File too large. Please upload a file smaller than 10MB.'));
       return;
     }
-    
+
     reader.onload = async (e) => {
       try {
         let text = '';
-        
+
         if (fileExt === 'txt') {
           text = e.target.result;
         } else if (fileExt === 'pdf') {
           try {
             const pdfjsLib = window['pdfjs-dist/build/pdf'];
             pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-            
+
             const typedArray = new Uint8Array(e.target.result);
             const pdf = await pdfjsLib.getDocument({ data: typedArray }).promise;
-            
+
             let fullText = '';
             for (let i = 1; i <= pdf.numPages; i++) {
               const page = await pdf.getPage(i);
@@ -222,13 +231,13 @@ const extractTextFromFile = async (file) => {
           reject(new Error('Unsupported file format. Please upload PDF, DOCX, DOC, or TXT files.'));
           return;
         }
-        
+
         // Validate if it's a resume format
         if (!isResumeFormat(text)) {
           reject(new Error('The uploaded file does not appear to be a resume. Please upload a valid resume document.'));
           return;
         }
-        
+
         resolve({
           isBase64: false,
           text: text.trim() || `Resume uploaded: ${file.name}`,
@@ -238,9 +247,9 @@ const extractTextFromFile = async (file) => {
         reject(new Error(`Failed to read file: ${error.message}`));
       }
     };
-    
+
     reader.onerror = () => reject(new Error('Failed to read file'));
-    
+
     if (fileExt === 'pdf' || fileExt === 'docx' || fileExt === 'doc') {
       reader.readAsArrayBuffer(file);
     } else if (fileExt === 'txt') {
@@ -254,23 +263,23 @@ const extractTextFromFile = async (file) => {
 // New helper function to format answers with sections
 const formatAnswerWithSections = (text) => {
   if (!text) return { isStructured: true, sections: [] };
-  
+
   const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
   const sections = [];
   let currentSection = { title: '', points: [] };
-  
+
   for (const line of lines) {
     // Check for section headers (ending with colon)
     if (line.match(/^[A-Z][A-Z\s]+:$/) || line.match(/^[A-Z][a-zA-Z\s]+:$/)) {
       if (currentSection.title || currentSection.points.length > 0) {
         sections.push({ ...currentSection });
       }
-      currentSection = { 
-        title: line.replace(':', '').trim(), 
+      currentSection = {
+        title: line.replace(':', '').trim(),
         points: [],
         isParagraph: line.includes('SAMPLE ANSWER')
       };
-    } 
+    }
     // Check for bullet points
     else if (line.match(/^[•\-–—]\s+/) || line.match(/^\d+\.\s+/)) {
       // eslint-disable-next-line no-useless-escape
@@ -285,11 +294,11 @@ const formatAnswerWithSections = (text) => {
       currentSection.points.push(line);
     }
   }
-  
+
   if (currentSection.title || currentSection.points.length > 0) {
     sections.push({ ...currentSection });
   }
-  
+
   return {
     isStructured: true,
     sections: sections
@@ -299,7 +308,7 @@ const formatAnswerWithSections = (text) => {
 // Format suggestion text into structured format
 const formatSuggestionText = (text) => {
   if (!text) return '';
-  
+
   // Remove markdown formatting
   let formatted = text
     .replace(/\*\*/g, '')
@@ -307,14 +316,14 @@ const formatSuggestionText = (text) => {
     .replace(/#{1,6}\s*/g, '')
     .replace(/```[\s\S]*?```/g, '')
     .replace(/`/g, '');
-  
+
   // Split into lines and clean up
   const lines = formatted.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-  
+
   // Group lines into sections
   const sections = [];
   let currentSection = { title: '', points: [] };
-  
+
   for (const line of lines) {
     if (line.match(/^(Structure|Key Points|Examples|Tips|Steps|Approach|What to Include|How to Structure|Important Notes|Do's and Don'ts):/i)) {
       if (currentSection.title || currentSection.points.length > 0) {
@@ -334,11 +343,11 @@ const formatSuggestionText = (text) => {
       currentSection = { title: line, points: [] };
     }
   }
-  
+
   if (currentSection.title || currentSection.points.length > 0) {
     sections.push({ ...currentSection });
   }
-  
+
   // If we couldn't parse into sections, return as bullet points
   if (sections.length === 0) {
     return {
@@ -346,7 +355,7 @@ const formatSuggestionText = (text) => {
       content: formatted
     };
   }
-  
+
   return {
     isStructured: true,
     sections: sections
@@ -359,13 +368,13 @@ const analyzeResumeAndGenerateQuestions = async (resumeFile, jobDescription, dif
     console.log('Starting resume analysis...');
     const resumeData = await extractTextFromFile(resumeFile);
     console.log('Resume text extracted, length:', resumeData.text.length);
-    
+
     const difficultyPrompt = {
       'beginner': 'Generate basic, fundamental questions suitable for entry-level/junior positions.',
       'medium': 'Generate practical, experience-based questions suitable for mid-level positions.',
       'advanced': 'Generate complex, system-level and leadership questions suitable for senior/expert positions.'
     }[difficultyLevel] || '';
-    
+
     const prompt = `You are an expert interview coach. Analyze the resume provided and generate personalized interview questions.
 
 Resume Content:
@@ -412,16 +421,16 @@ CRITICAL: The questions MUST be personalized based on the resume content. Refere
     console.log('Calling Gemini API for question generation...');
     const response = await callGeminiAPI(prompt, resumeData);
     console.log('API Response received:', response.substring(0, 200) + '...');
-    
+
     let jsonStr = response.trim();
-    
+
     // Clean JSON string
     jsonStr = jsonStr.replace(/```json\n?/g, '').replace(/```\n?/g, '');
     jsonStr = jsonStr.replace(/^[\s\S]*?\{/, '{');
     jsonStr = jsonStr.replace(/\}[\s\S]*$/, '}');
-    
+
     const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-    
+
     if (jsonMatch) {
       try {
         const parsed = JSON.parse(jsonMatch[0]);
@@ -429,15 +438,15 @@ CRITICAL: The questions MUST be personalized based on the resume content. Refere
           technicalCount: parsed.technicalQuestions?.length,
           behavioralCount: parsed.behavioralQuestions?.length
         });
-        
-        if (parsed.technicalQuestions && parsed.behavioralQuestions && 
-            Array.isArray(parsed.technicalQuestions) && 
-            Array.isArray(parsed.behavioralQuestions)) {
-          
+
+        if (parsed.technicalQuestions && parsed.behavioralQuestions &&
+          Array.isArray(parsed.technicalQuestions) &&
+          Array.isArray(parsed.behavioralQuestions)) {
+
           // Ensure we have exactly 5 questions each
           const technicalQuestions = parsed.technicalQuestions.slice(0, 5);
           const behavioralQuestions = parsed.behavioralQuestions.slice(0, 5);
-          
+
           // Fill missing questions if needed
           while (technicalQuestions.length < 5) {
             technicalQuestions.push(`Technical question about ${difficultyLevel} concepts`);
@@ -445,7 +454,7 @@ CRITICAL: The questions MUST be personalized based on the resume content. Refere
           while (behavioralQuestions.length < 5) {
             behavioralQuestions.push(`Behavioral question about teamwork and collaboration`);
           }
-          
+
           return {
             technicalQuestions,
             behavioralQuestions
@@ -456,13 +465,13 @@ CRITICAL: The questions MUST be personalized based on the resume content. Refere
         console.error('Response that failed to parse:', jsonStr);
       }
     }
-    
+
     console.log('Failed to parse valid questions from API, using fallback...');
     throw new Error('Failed to parse questions from AI response');
-    
+
   } catch (error) {
     console.error('Error generating questions:', error);
-    
+
     // Fallback questions based on difficulty level
     const fallbackQuestions = {
       'beginner': {
@@ -514,7 +523,7 @@ CRITICAL: The questions MUST be personalized based on the resume content. Refere
         ]
       }
     };
-    
+
     return fallbackQuestions[difficultyLevel] || fallbackQuestions.medium;
   }
 };
@@ -545,22 +554,22 @@ Respond with ONLY valid JSON (no markdown):
 }`;
 
     const response = await callGeminiAPI(prompt);
-    
+
     // Clean up response
     let jsonStr = response.trim()
       .replace(/```json\s*/g, '')
       .replace(/```\s*/g, '')
       .replace(/^[\s\S]*?\{/, '{')  // Remove any text before first {
       .replace(/\}[\s\S]*$/, '}');   // Remove any text after last }
-    
+
     try {
       const parsed = JSON.parse(jsonStr);
-      
+
       // Validate score
       if (parsed.score < 0 || parsed.score > 100) {
         parsed.score = Math.max(0, Math.min(100, parsed.score));
       }
-      
+
       // Ensure all required fields
       return {
         score: parsed.score || 75,
@@ -571,11 +580,11 @@ Respond with ONLY valid JSON (no markdown):
       };
     } catch (parseError) {
       console.error('JSON parse error:', parseError, 'Response:', response);
-      
+
       // Fallback: Analyze the response for score keywords
       const text = response.toLowerCase();
       let score = 75;
-      
+
       if (text.includes('excellent') || text.includes('outstanding') || text.includes('perfect')) {
         score = 95;
       } else if (text.includes('very good') || text.includes('great')) {
@@ -589,7 +598,7 @@ Respond with ONLY valid JSON (no markdown):
       } else if (text.includes('poor') || text.includes('weak')) {
         score = 50;
       }
-      
+
       return {
         score: score,
         feedback: "Your answer has been evaluated. " + (response.length > 200 ? response.substring(0, 200) + "..." : response),
@@ -651,7 +660,7 @@ Make the answer:
 - Show both technical depth and communication skills`;
 
     const response = await callGeminiAPI(prompt);
-    
+
     // Format for display with sections
     const formatted = formatAnswerWithSections(response);
     return formatted;
@@ -706,9 +715,8 @@ const Toast = ({ message, type, onClose }) => {
   }, [onClose]);
 
   return (
-    <div className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg ${
-      type === 'error' ? 'bg-red-500' : 'bg-green-500'
-    } text-white`}>
+    <div className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg ${type === 'error' ? 'bg-red-500' : 'bg-green-500'
+      } text-white`}>
       {type === 'error' ? <AlertCircle size={20} /> : <CheckCircle size={20} />}
       <span>{message}</span>
     </div>
@@ -730,7 +738,7 @@ const VoiceRecorder = ({ onTranscription }) => {
 
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    
+
     if (!SpeechRecognition) return;
 
     const recognition = new SpeechRecognition();
@@ -767,18 +775,18 @@ const VoiceRecorder = ({ onTranscription }) => {
 
     recognition.onerror = (event) => {
       console.error('Speech recognition error:', event.error);
-      
+
       // Ignore 'aborted' errors when we intentionally stop
       if (event.error === 'aborted' && isStoppingRef.current) {
         return;
       }
-      
+
       // Ignore 'no-speech' errors
       if (event.error === 'no-speech') {
         console.log('No speech detected, continuing...');
         return;
       }
-      
+
       // For other errors, stop recording and alert user
       if (event.error !== 'aborted') {
         setTimeout(() => {
@@ -791,7 +799,7 @@ const VoiceRecorder = ({ onTranscription }) => {
 
     recognition.onend = () => {
       console.log('Speech recognition ended, isRecording:', isRecordingRef.current, 'isStopping:', isStoppingRef.current);
-      
+
       // Only restart if we're still supposed to be recording and not intentionally stopping
       if (isRecordingRef.current && !isStoppingRef.current) {
         try {
@@ -820,7 +828,7 @@ const VoiceRecorder = ({ onTranscription }) => {
 
   const handleRecord = async () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    
+
     if (!SpeechRecognition) {
       alert('Speech recognition is not supported in your browser. Please use Chrome, Edge, or Safari.');
       return;
@@ -831,7 +839,7 @@ const VoiceRecorder = ({ onTranscription }) => {
       finalTranscriptRef.current = '';
       isStoppingRef.current = false;
       setIsRecording(true);
-      
+
       try {
         if (recognitionRef.current) {
           recognitionRef.current.start();
@@ -846,7 +854,7 @@ const VoiceRecorder = ({ onTranscription }) => {
       isStoppingRef.current = true;
       setIsRecording(false);
       setIsProcessing(true);
-      
+
       if (recognitionRef.current) {
         try {
           recognitionRef.current.stop();
@@ -854,19 +862,19 @@ const VoiceRecorder = ({ onTranscription }) => {
           console.log('Stop error:', e);
         }
       }
-      
+
       // Wait a bit for final results to come in
       await new Promise(resolve => setTimeout(resolve, 500));
-      
+
       const transcript = finalTranscriptRef.current.trim();
-      
+
       if (transcript && transcript.length > 0) {
         console.log('Final transcript:', transcript);
         onTranscription(' ' + transcript);
       } else {
         alert('No speech detected. Please speak clearly and try again. Make sure your microphone is working and you have granted permissions.');
       }
-      
+
       setIsProcessing(false);
       finalTranscriptRef.current = '';
     }
@@ -877,11 +885,10 @@ const VoiceRecorder = ({ onTranscription }) => {
       <button
         onClick={handleRecord}
         disabled={isProcessing}
-        className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
-          isRecording 
-            ? 'bg-red-500 hover:bg-red-600 animate-pulse' 
+        className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isRecording
+            ? 'bg-red-500 hover:bg-red-600 animate-pulse'
             : 'bg-blue-600 hover:bg-blue-700'
-        } text-white disabled:opacity-50`}
+          } text-white disabled:opacity-50`}
       >
         {isProcessing ? (
           <Loader2 className="animate-spin" size={20} />
@@ -902,7 +909,7 @@ const VoiceRecorder = ({ onTranscription }) => {
 // Structured Suggestion Display Component
 const StructuredSuggestion = ({ suggestion }) => {
   if (!suggestion) return null;
-  
+
   if (!suggestion.isStructured) {
     return (
       <div className="text-sm whitespace-pre-line bg-gray-900/30 p-4 rounded-lg">
@@ -910,24 +917,23 @@ const StructuredSuggestion = ({ suggestion }) => {
       </div>
     );
   }
-  
+
   return (
     <div className="space-y-6">
       {suggestion.sections.map((section, index) => (
         <div key={index} className="space-y-3">
           {section.title && (
-            <h5 className={`font-bold ${
-              section.title === 'SAMPLE ANSWER' 
-                ? 'text-green-400 text-lg' 
+            <h5 className={`font-bold ${section.title === 'SAMPLE ANSWER'
+                ? 'text-green-400 text-lg'
                 : 'text-blue-300 text-sm'
-            }`}>
+              }`}>
               {section.title}
               {section.title === 'SAMPLE ANSWER' && (
                 <span className="ml-2 text-sm text-yellow-400">(Score: 95+/100)</span>
               )}
             </h5>
           )}
-          
+
           {section.points.length > 0 && (
             <div className="pl-4 space-y-2">
               {section.title === 'SAMPLE ANSWER' ? (
@@ -1010,7 +1016,7 @@ const QuestionCard = ({ question, index, type }) => {
         <span className="text-left font-medium">Question {index + 1}: {question}</span>
         <ChevronRight className={`transition-transform ${isOpen ? 'rotate-90' : ''}`} size={20} />
       </button>
-      
+
       {isOpen && (
         <div className="p-4 space-y-4 border-t border-gray-700">
           <div>
@@ -1108,7 +1114,7 @@ const InteractiveInterview = () => {
   const handleSubmit = async () => {
     if (!answer.trim()) return;
     setIsSubmitting(true);
-    
+
     setState({
       answers: { ...state.answers, [key]: answer }
     });
@@ -1162,7 +1168,7 @@ const InteractiveInterview = () => {
           </span>
         </div>
         <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-          <div 
+          <div
             className="h-full bg-blue-600 transition-all duration-300"
             style={{ width: `${progress}%` }}
           />
@@ -1288,21 +1294,19 @@ const InterviewWorkspace = () => {
       <div className="flex gap-2 border-b border-gray-700">
         <button
           onClick={() => setActiveTab('technical')}
-          className={`px-6 py-3 font-medium transition-colors ${
-            activeTab === 'technical'
+          className={`px-6 py-3 font-medium transition-colors ${activeTab === 'technical'
               ? 'border-b-2 border-blue-500 text-blue-400'
               : 'text-gray-400 hover:text-white'
-          }`}
+            }`}
         >
           Technical ({state.technicalQuestions.length})
         </button>
         <button
           onClick={() => setActiveTab('behavioral')}
-          className={`px-6 py-3 font-medium transition-colors ${
-            activeTab === 'behavioral'
+          className={`px-6 py-3 font-medium transition-colors ${activeTab === 'behavioral'
               ? 'border-b-2 border-blue-500 text-blue-400'
               : 'text-gray-400 hover:text-white'
-          }`}
+            }`}
         >
           Behavioral ({state.behavioralQuestions.length})
         </button>
@@ -1347,9 +1351,8 @@ const LevelSelection = ({ onNext }) => {
               setSelectedLevel(level.id);
               setState({ difficultyLevel: level.id, selectedLevel: level.id });
             }}
-            className={`p-6 rounded-lg border-2 transition-all hover:scale-105 text-left ${
-              selectedLevel === level.id ? 'border-blue-500 bg-blue-900/30' : 'border-gray-700 bg-gray-800'
-            }`}
+            className={`p-6 rounded-lg border-2 transition-all hover:scale-105 text-left ${selectedLevel === level.id ? 'border-blue-500 bg-blue-900/30' : 'border-gray-700 bg-gray-800'
+              }`}
           >
             <div className="text-4xl mb-3">{level.icon}</div>
             <h3 className="text-xl font-bold mb-2">{level.name}</h3>
@@ -1441,18 +1444,18 @@ const PerformanceDashboard = () => {
     const allAnswers = Object.values(answers);
     const totalQuestions = technicalQuestions.length + behavioralQuestions.length;
     const answeredQuestions = allAnswers.length;
-    
+
     let avgScore = 0;
     if (allFeedback.length > 0) {
       avgScore = Math.round(allFeedback.reduce((sum, f) => sum + (f.score || 0), 0) / allFeedback.length);
     }
-    
+
     const completionRate = totalQuestions > 0 ? Math.round((answeredQuestions / totalQuestions) * 100) : 0;
-    
+
     // Calculate scores by question type
     const technicalScores = [];
     const behavioralScores = [];
-    
+
     Object.keys(feedback).forEach(key => {
       if (key.startsWith('technical-') && feedback[key].score) {
         technicalScores.push(feedback[key].score);
@@ -1460,11 +1463,11 @@ const PerformanceDashboard = () => {
         behavioralScores.push(feedback[key].score);
       }
     });
-    
-    const avgTechnicalScore = technicalScores.length > 0 
+
+    const avgTechnicalScore = technicalScores.length > 0
       ? Math.round(technicalScores.reduce((a, b) => a + b, 0) / technicalScores.length)
       : 0;
-      
+
     const avgBehavioralScore = behavioralScores.length > 0
       ? Math.round(behavioralScores.reduce((a, b) => a + b, 0) / behavioralScores.length)
       : 0;
@@ -1488,26 +1491,26 @@ const PerformanceDashboard = () => {
       <h2 className="text-3xl font-bold flex items-center gap-3">
         <BarChart3 size={32} /> Performance Analytics
       </h2>
-      
+
       <div className="grid md:grid-cols-4 gap-4">
         <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
           <Target className="text-blue-400 mb-2" size={24} />
           <div className="text-2xl font-bold">{stats.completionRate}%</div>
           <div className="text-sm text-gray-400">Completion Rate</div>
         </div>
-        
+
         <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
           <Award className="text-green-400 mb-2" size={24} />
           <div className="text-2xl font-bold">{stats.averageScore}</div>
           <div className="text-sm text-gray-400">Average Score</div>
         </div>
-        
+
         <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
           <TrendingUp className="text-yellow-400 mb-2" size={24} />
           <div className="text-2xl font-bold">{stats.avgTechnicalScore}</div>
           <div className="text-sm text-gray-400">Technical Score</div>
         </div>
-        
+
         <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
           <CheckCircle className="text-purple-400 mb-2" size={24} />
           <div className="text-2xl font-bold">{stats.avgBehavioralScore}</div>
@@ -1526,20 +1529,20 @@ const PerformanceDashboard = () => {
                   <span className="text-sm">{stats.technicalAnswered}/{technicalQuestions.length}</span>
                 </div>
                 <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
-                  <div 
+                  <div
                     className="h-full bg-blue-500"
                     style={{ width: `${(stats.technicalAnswered / technicalQuestions.length) * 100}%` }}
                   />
                 </div>
               </div>
-              
+
               <div>
                 <div className="flex justify-between mb-1">
                   <span className="text-sm">Behavioral Questions</span>
                   <span className="text-sm">{stats.behavioralAnswered}/{behavioralQuestions.length}</span>
                 </div>
                 <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
-                  <div 
+                  <div
                     className="h-full bg-purple-500"
                     style={{ width: `${(stats.behavioralAnswered / behavioralQuestions.length) * 100}%` }}
                   />
@@ -1547,7 +1550,7 @@ const PerformanceDashboard = () => {
               </div>
             </div>
           </div>
-          
+
           <div className="bg-gray-800 border border-gray-700 rounded-lg p-6">
             <h3 className="text-xl font-bold mb-4">Improvement Tips</h3>
             <ul className="space-y-2 text-sm">
@@ -1616,21 +1619,21 @@ const ResumeUploader = ({ onAnalyze }) => {
         technical: result.technicalQuestions?.length,
         behavioral: result.behavioralQuestions?.length
       });
-      
+
       setState({
         resumeFile: file,
         jobDescription: jobDesc,
         technicalQuestions: result.technicalQuestions || [],
         behavioralQuestions: result.behavioralQuestions || []
       });
-      
+
       onAnalyze();
       setToast({ message: 'Resume analyzed successfully! Questions generated.', type: 'success' });
     } catch (error) {
       console.error('Error in handleAnalyze:', error);
-      setToast({ 
-        message: error.message || 'Failed to analyze resume. Please try again with a valid resume document.', 
-        type: 'error' 
+      setToast({
+        message: error.message || 'Failed to analyze resume. Please try again with a valid resume document.',
+        type: 'error'
       });
     } finally {
       setIsAnalyzing(false);
@@ -1640,13 +1643,13 @@ const ResumeUploader = ({ onAnalyze }) => {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       {toast && <Toast {...toast} onClose={() => setToast(null)} />}
-      
+
       {state.selectedLevel && (
         <div className="bg-blue-900/30 border border-blue-700 rounded-lg p-4 text-center">
           <span className="text-lg font-semibold">
             Selected Level: {state.selectedLevel.charAt(0).toUpperCase() + state.selectedLevel.slice(1)}
           </span>
-          <button 
+          <button
             onClick={() => setState({ selectedLevel: null, difficultyLevel: 'medium' })}
             className="ml-4 text-sm text-blue-300 hover:text-blue-100"
           >
@@ -1654,7 +1657,7 @@ const ResumeUploader = ({ onAnalyze }) => {
           </button>
         </div>
       )}
-      
+
       <div className="bg-gray-800 border border-gray-700 rounded-lg p-8 space-y-6">
         <div>
           <label className="block text-sm font-medium mb-3">Upload Your Resume *</label>
@@ -1762,7 +1765,7 @@ export default function CareerForgeAI() {
                 Upload your resume and get AI-powered interview preparation
               </p>
             </div>
-            
+
             {showLevelSelection ? (
               <LevelSelection onNext={() => setShowLevelSelection(false)} />
             ) : (
