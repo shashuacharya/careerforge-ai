@@ -73,6 +73,12 @@ const useStore = (selector = (state) => state) => {
 };
 // Helper function to call Gemini API via secure proxy
 const callGeminiAPI = async (prompt, fileData = null) => {
+  // Use direct call in local development
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    console.log('Local development detected - using direct API call');
+    return callGeminiAPIDirect(prompt, fileData);
+  }
+
   try {
     const response = await fetch('/api/generate', {
       method: 'POST',
@@ -89,11 +95,6 @@ const callGeminiAPI = async (prompt, fileData = null) => {
     return data.text;
   } catch (error) {
     console.error('API Error:', error);
-    // Fallback for local development if the API route isn't available
-    if (import.meta.env.VITE_GEMINI_API_KEY && error.message.includes('Unexpected token')) {
-      console.log('API route not found, falling back to direct call (Local Dev Only)');
-      return callGeminiAPIDirect(prompt, fileData);
-    }
     throw error;
   }
 };
@@ -101,7 +102,7 @@ const callGeminiAPI = async (prompt, fileData = null) => {
 // Fallback for local development only
 const callGeminiAPIDirect = async (prompt, fileData = null) => {
   const key = import.meta.env.VITE_GEMINI_API_KEY;
-  const url = 'https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent';
+  const url = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent';
 
   const parts = [];
   if (fileData && fileData.isBase64) {
@@ -118,6 +119,12 @@ const callGeminiAPIDirect = async (prompt, fileData = null) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ contents: [{ parts }] })
   });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    console.error('API Error Details:', errorData);
+    throw new Error(`API Error: ${response.status} - ${errorData.error?.message || 'Unknown error'}`);
+  }
 
   const data = await response.json();
   return data.candidates[0].content.parts[0].text;

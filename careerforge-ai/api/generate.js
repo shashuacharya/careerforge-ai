@@ -5,7 +5,7 @@ export default async function handler(req, res) {
 
     const { prompt, fileData } = req.body;
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-    const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent';
+    const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent';
 
     if (!GEMINI_API_KEY) {
         return res.status(500).json({ error: 'API key not configured' });
