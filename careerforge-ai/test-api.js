@@ -1,5 +1,5 @@
 // Test with gemini-2.5-flash
-const API_KEY = 'AIzaSyC-7HJhxy-3RRYfj99L9Z3pVPmJNNUlNzs';
+const API_KEY = process.env.VITE_GEMINI_API_KEY || 'YOUR_API_KEY_HERE';
 const API_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent';
 
 async function testAPI() {
