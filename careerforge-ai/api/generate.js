@@ -47,6 +47,10 @@ export default async function handler(req, res) {
         res.status(200).json({ text });
     } catch (error) {
         console.error('Proxy Error:', error);
-        res.status(500).json({ error: 'Failed to fetch from Gemini' });
+        // Returns the actual error message for debugging
+        res.status(500).json({
+            error: error.message || 'Failed to fetch from Gemini',
+            details: error.toString()
+        });
     }
 }
