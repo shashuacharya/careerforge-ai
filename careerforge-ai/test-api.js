@@ -1,5 +1,34 @@
-// Test with gemini-2.5-flash
-const API_KEY = process.env.VITE_GEMINI_API_KEY || 'YOUR_API_KEY_HERE';
+import fs from 'fs';
+import path from 'path';
+
+// Try to get API key from environment or .env file
+let API_KEY = process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+
+if (!API_KEY || API_KEY.includes('YOUR_API_KEY_HERE')) {
+    try {
+        const envPath = path.resolve(process.cwd(), '.env');
+        if (fs.existsSync(envPath)) {
+            const envContent = fs.readFileSync(envPath, 'utf8');
+            // Look for either VITE_GEMINI_API_KEY or GEMINI_API_KEY
+            const match = envContent.match(/VITE_GEMINI_API_KEY=(.*)/) || envContent.match(/GEMINI_API_KEY=(.*)/);
+            if (match) {
+                API_KEY = match[1].trim();
+                // Remove quotes if present
+                if ((API_KEY.startsWith('"') && API_KEY.endsWith('"')) || (API_KEY.startsWith("'") && API_KEY.endsWith("'"))) {
+                    API_KEY = API_KEY.slice(1, -1);
+                }
+                console.log('✅ Loaded API Key from .env file');
+            }
+        }
+    } catch (e) {
+        console.warn('⚠️ Could not read .env file:', e.message);
+    }
+}
+
+if (!API_KEY || API_KEY.includes('YOUR_API_KEY_HERE')) {
+    console.error('❌ No API Key found. Please set VITE_GEMINI_API_KEY in .env');
+    process.exit(1);
+}
 const API_URL = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent';
 
 async function testAPI() {
